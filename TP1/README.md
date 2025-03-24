@@ -20,11 +20,7 @@ Este proyecto incluye un servidor y un cliente, ambos implementados en Java y ej
 
 - docker compose build
 
-- En este hit se pide implementar la caracteristica de que un servidor siga funcionando en caso de que un cliente cierre la conexion, para ver esta caracteristica se puede levantar un servidor y multiples clientes:
-
-- docker compose up servidor (en una terminal)
-
-- docker compose up cliente (en otra terminal distinta) (se puede repetir multiples veces para visualizar la caracteristica)
+- En este hit se pide unir los programas cliente y servidor, los parametros de direcciones ip y puertos de cada nodo se encuentran en el archivo docker compose, para ejecutar este hit se debe realizar un docker compose up, de manera que se levanten ambos servicios, o iniciarlos por separado con un docker compose up nodoN (siendo N el numero del nodo que se desee levantar)
 
 3. **Acceso a la aplicación:**
 

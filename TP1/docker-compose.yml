@@ -1,22 +1,32 @@
 services:
-  servidor:
+  nodo1:
     build: ./nodo
-    container_name: servidor
-    ports:
-      - "8080:8080"   # Mapea el puerto 8080 del contenedor al host
+    container_name: nodo1
     networks:
-      - red_cliente_servidor
-    command: java Nodo 0.0.0.0 8080 0.0.0.0 8081 # Dirección del servidor y puerto de escucha
+      - red_nodos
+    command: java Nodo 8080 nodo2 8081
 
-  cliente:
+  nodo2:
     build: ./nodo
-    container_name: cliente
-    depends_on:
-      - servidor  # Asegura que el servidor esté en marcha antes de ejecutar el cliente
+    container_name: nodo2
     networks:
-      - red_cliente_servidor
-    command: java Nodo 0.0.0.0 8081 0.0.0.0 8080 # Dirección del cliente y puerto del servidor
+      - red_nodos
+    command: java Nodo 8081 nodo1 8080 
+
+  nodo3:
+    build: ./nodo
+    container_name: nodo3
+    networks:
+      - red_nodos
+    command: java Nodo 8082 nodo4 8083
+
+  nodo4:
+    build: ./nodo
+    container_name: nodo4
+    networks:
+      - red_nodos
+    command: java Nodo 8083 nodo3 8082
 
 networks:
-  red_cliente_servidor:
+  red_nodos:
     driver: bridge

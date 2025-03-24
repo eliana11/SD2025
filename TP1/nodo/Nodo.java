@@ -1,78 +1,72 @@
-
 import java.io.*;
 import java.net.*;
+import java.util.concurrent.*;
 
-public class Nodo{
-
-    public static void main(String[] args) {
-        if (args.length != 4) {
-            System.out.println("Uso: java ProgramaC <IP_Servidor> <Puerto_Servidor> <IP_Cliente> <Puerto_Cliente>");
-            return;
-        }
-
-        String ipServidor = args[0];
-        int puertoServidor = Integer.parseInt(args[1]);
-        String ipCliente = args[2];
-        int puertoCliente = Integer.parseInt(args[3]);
-
-        // Hilo para escuchar en el puerto del servidor
-        Thread hiloServidor = new Thread(() -> iniciarServidor(puertoServidor));
-
-        // Hilo para enviar un saludo al otro nodo
-        Thread hiloCliente = new Thread(() -> iniciarCliente(ipCliente, puertoCliente));
-
-        // Iniciar ambos hilos
-        hiloServidor.start();
-        hiloCliente.start();
-    }
-
-    // Método para iniciar el servidor (escuchar los saludos)
-    public static void iniciarServidor(int puerto) {
+public class Nodo {
+    private static void iniciarServidor(int puerto) {
+        ExecutorService executor = Executors.newFixedThreadPool(5);
+        
         try (ServerSocket serverSocket = new ServerSocket(puerto)) {
-            System.out.println("Servidor escuchando en el puerto " + puerto + "...");
-
+            System.out.println("[SERVIDOR] Escuchando en el puerto " + puerto);
+            
             while (true) {
                 Socket socket = serverSocket.accept();
-                System.out.println("Conexión establecida con " + socket.getInetAddress());
-
-                // Leer el saludo del cliente
-                BufferedReader entrada = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-                String saludo = entrada.readLine();
-                System.out.println("Recibido del cliente: " + saludo);
-
-                // Responder al cliente
-                PrintWriter salida = new PrintWriter(socket.getOutputStream(), true);
-                salida.println("¡Hola desde el servidor!");
-
-                socket.close();
+                executor.execute(() -> manejarConexion(socket));
             }
         } catch (IOException e) {
-            System.out.println("Error en el servidor: " + e.getMessage());
+            System.err.println("[SERVIDOR] Error: " + e.getMessage());
         }
     }
 
-    // Método para iniciar el cliente (enviar un saludo al servidor)
-    public static void iniciarCliente(String ip, int puerto) {
-        try {
-            // Espera un poco para asegurarse de que el servidor esté listo
-            Thread.sleep(1000);
-
-            // Conectar al servidor
-            Socket socket = new Socket(ip, puerto);
-            System.out.println("Conectado al servidor en " + ip + ":" + puerto);
-
-            // Enviar un saludo
-            PrintWriter salida = new PrintWriter(socket.getOutputStream(), true);
-            salida.println("¡Hola, servidor!");
-
-            // Leer la respuesta del servidor
-            BufferedReader entrada = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-            String respuesta = entrada.readLine();
-            System.out.println("Respuesta del servidor: " + respuesta);
-
-            socket.close();
-        } catch (IOException | InterruptedException e) {
-            System.out.println("Error en el cliente: " + e.getMessage());
+    private static void manejarConexion(Socket socket) {
+        try (BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+             PrintWriter out = new PrintWriter(socket.getOutputStream(), true)) {
+            
+            System.out.println("[SERVIDOR] Conexión establecida con " + socket.getRemoteSocketAddress());
+            String mensaje;
+            while ((mensaje = in.readLine()) != null) {
+                System.out.println("[SERVIDOR] Mensaje recibido: " + mensaje);
+                out.println("Hola, cliente!");
+            }
+        } catch (IOException e) {
+            System.err.println("[SERVIDOR] Cliente desconectado abruptamente");
         }
+    }
+
+    private static void iniciarCliente(String ip, int puerto) {
+        while (true) {
+            try (Socket socket = new Socket(ip, puerto);
+                 PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
+                 BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()))) {
+                
+                System.out.println("[CLIENTE] Conectado a " + ip + ":" + puerto);
+                
+                while (true) {
+                    out.println("Hola, servidor!");
+                    System.out.println("[CLIENTE] Respuesta recibida: " + in.readLine());
+                    Thread.sleep(5000);
+                }
+            } catch (IOException | InterruptedException e) {
+                System.out.println("[CLIENTE] No se pudo conectar a " + ip + ":" + puerto + ". Reintentando en 5 segundos...");
+                try {
+                    Thread.sleep(5000);
+                } catch (InterruptedException ignored) {}
+            }
+        }
+    }
+
+    public static void main(String[] args) {
+        if (args.length != 3) {
+            System.out.println("Uso: java Nodo <puerto_escucha> <ip_destino> <puerto_destino>");
+            return;
+        }
+        
+        
+        int puertoEscucha = Integer.parseInt(args[0]);
+        String ipDestino = args[1];
+        int puertoDestino = Integer.parseInt(args[2]);
+        
+        new Thread(() -> iniciarServidor(puertoEscucha)).start();
+        iniciarCliente(ipDestino, puertoDestino);
     }
 }

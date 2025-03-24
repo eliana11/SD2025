@@ -8,5 +8,3 @@ COPY Nodo.java .
 # Compilar el programa Java
 RUN javac Nodo.java
 
-# Ejecutar el programa Java cuando se inicie el contenedor
-CMD ["java", "Nodo"]
