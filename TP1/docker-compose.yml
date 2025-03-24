@@ -1,0 +1,20 @@
+services:
+ servidor:
+   build: ./servidor        # Ruta al Dockerfile del servidor
+   ports:
+     - "8080:8080"          # Mapea el puerto 8080 del contenedor al host
+   networks:
+     - red_cliente_servidor # Red que conecta ambos contenedores
+
+
+ cliente:
+   build: ./cliente         # Ruta al Dockerfile del cliente
+   depends_on:
+     - servidor             # El cliente depende del servidor
+   networks:
+     - red_cliente_servidor # Red que conecta ambos contenedores
+
+
+networks:
+ red_cliente_servidor:
+   driver: bridge           # Usamos el driver bridge para la red
