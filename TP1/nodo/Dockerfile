@@ -1,12 +1,14 @@
-# Usamos una imagen base de Java
-FROM openjdk:17-jdk-slim
+# Usar una imagen con OpenJDK y Maven
+FROM maven:3.8.1-openjdk-17-slim
 
-# Copiar el código fuente
+# Crear directorio de trabajo
 WORKDIR /app
-COPY Nodo.java .
 
-# Compilar el programa Java
-RUN javac Nodo.java
+# Copiar los archivos del proyecto (incluido pom.xml)
+COPY . .
 
-# Ejecutar el programa Java cuando se inicie el contenedor
-CMD ["java", "Nodo"]
+# Construir el proyecto usando Maven
+RUN mvn clean install
+
+# Ejecutar el programa Java
+CMD ["java", "-cp", "target/tp1-1.0-SNAPSHOT-jar-with-dependencies.jar", "Nodo"]

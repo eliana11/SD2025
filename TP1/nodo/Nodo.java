@@ -1,32 +1,42 @@
-
 import java.io.*;
 import java.net.*;
+import com.google.gson.Gson; // Importar la librería Gson
 
-public class Nodo{
+public class Nodo {
+    
+    private static final Gson gson = new Gson(); // Instancia de Gson
 
     public static void main(String[] args) {
         if (args.length != 4) {
-            System.out.println("Uso: java ProgramaC <IP_Servidor> <Puerto_Servidor> <IP_Cliente> <Puerto_Cliente>");
+            System.out.println("Uso: java Nodo <IP_Servidor> <Puerto_Servidor> <IP_Cliente> <Puerto_Cliente>");
             return;
         }
 
-        String ipServidor = args[0];
         int puertoServidor = Integer.parseInt(args[1]);
         String ipCliente = args[2];
         int puertoCliente = Integer.parseInt(args[3]);
 
-        // Hilo para escuchar en el puerto del servidor
+        // Iniciar servidor en un hilo
         Thread hiloServidor = new Thread(() -> iniciarServidor(puertoServidor));
-
-        // Hilo para enviar un saludo al otro nodo
-        Thread hiloCliente = new Thread(() -> iniciarCliente(ipCliente, puertoCliente));
-
-        // Iniciar ambos hilos
         hiloServidor.start();
+
+        // Iniciar cliente en otro hilo
+        Thread hiloCliente = new Thread(() -> iniciarCliente(ipCliente, puertoCliente));
         hiloCliente.start();
     }
 
-    // Método para iniciar el servidor (escuchar los saludos)
+    // Clase interna para representar el mensaje JSON
+    static class Mensaje {
+        String origen;
+        String contenido;
+
+        Mensaje(String origen, String contenido) {
+            this.origen = origen;
+            this.contenido = contenido;
+        }
+    }
+
+    // Método para iniciar el servidor (escuchar mensajes)
     public static void iniciarServidor(int puerto) {
         try (ServerSocket serverSocket = new ServerSocket(puerto)) {
             System.out.println("Servidor escuchando en el puerto " + puerto + "...");
@@ -35,14 +45,18 @@ public class Nodo{
                 Socket socket = serverSocket.accept();
                 System.out.println("Conexión establecida con " + socket.getInetAddress());
 
-                // Leer el saludo del cliente
+                // Leer el mensaje JSON del cliente
                 BufferedReader entrada = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-                String saludo = entrada.readLine();
-                System.out.println("Recibido del cliente: " + saludo);
+                String mensajeJson = entrada.readLine();
+                
+                // Deserializar el mensaje JSON
+                Mensaje mensaje = gson.fromJson(mensajeJson, Mensaje.class);
+                System.out.println("Recibido de " + mensaje.origen + ": " + mensaje.contenido);
 
-                // Responder al cliente
+                // Enviar respuesta en JSON
                 PrintWriter salida = new PrintWriter(socket.getOutputStream(), true);
-                salida.println("¡Hola desde el servidor!");
+                Mensaje respuesta = new Mensaje("Servidor", "¡Hola desde el servidor!");
+                salida.println(gson.toJson(respuesta));
 
                 socket.close();
             }
@@ -51,24 +65,26 @@ public class Nodo{
         }
     }
 
-    // Método para iniciar el cliente (enviar un saludo al servidor)
+    // Método para iniciar el cliente (enviar un mensaje)
     public static void iniciarCliente(String ip, int puerto) {
         try {
-            // Espera un poco para asegurarse de que el servidor esté listo
-            Thread.sleep(1000);
+            Thread.sleep(1000); // Esperar para que el servidor esté listo
 
-            // Conectar al servidor
             Socket socket = new Socket(ip, puerto);
             System.out.println("Conectado al servidor en " + ip + ":" + puerto);
 
-            // Enviar un saludo
+            // Crear mensaje en formato JSON
             PrintWriter salida = new PrintWriter(socket.getOutputStream(), true);
-            salida.println("¡Hola, servidor!");
+            Mensaje mensaje = new Mensaje("Cliente", "¡Hola, servidor!");
+            salida.println(gson.toJson(mensaje));
 
-            // Leer la respuesta del servidor
+            // Leer la respuesta JSON del servidor
             BufferedReader entrada = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-            String respuesta = entrada.readLine();
-            System.out.println("Respuesta del servidor: " + respuesta);
+            String respuestaJson = entrada.readLine();
+            
+            // Deserializar la respuesta
+            Mensaje respuesta = gson.fromJson(respuestaJson, Mensaje.class);
+            System.out.println("Respuesta del servidor: " + respuesta.contenido);
 
             socket.close();
         } catch (IOException | InterruptedException e) {
