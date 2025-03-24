@@ -20,11 +20,11 @@ Este proyecto incluye un servidor y un cliente, ambos implementados en Java y ej
 
 - docker compose build
 
-- En este hit se pide implementar la caracteristica de reconexion por parte del cliente, por lo que, para poder evaluar su funcionamiento, el cliente debe levantarse antes que el servidor lo haga, por lo tanto se utilizan los siguientes comandos en orden:
+- En este hit se pide implementar la caracteristica de que un servidor siga funcionando en caso de que un cliente cierre la conexion, para ver esta caracteristica se puede levantar un servidor y multiples clientes:
 
-- docker compose up cliente
+- docker compose up servidor (en una terminal)
 
-- docker compose up servidor
+- docker compose up cliente (en otra terminal distinta) (se puede repetir multiples veces para visualizar la caracteristica)
 
 3. **Acceso a la aplicación:**
 
