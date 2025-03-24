@@ -9,8 +9,6 @@ services:
 
  cliente:
    build: ./cliente         # Ruta al Dockerfile del cliente
-   depends_on:
-     - servidor             # El cliente depende del servidor
    networks:
      - red_cliente_servidor # Red que conecta ambos contenedores
 

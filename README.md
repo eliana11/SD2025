@@ -18,15 +18,21 @@ Este proyecto incluye un servidor y un cliente, ambos implementados en Java y ej
 
 2. **Construir y levantar los contenedores con Docker Compose:** 
 
-- docker compose up --build
+- docker compose build
+
+- En este hit se pide implementar la caracteristica de reconexion por parte del cliente, por lo que, para poder evaluar su funcionamiento, el cliente debe levantarse antes que el servidor lo haga, por lo tanto se utilizan los siguientes comandos en orden:
+
+- docker compose up cliente
+
+- docker compose up servidor
 
 3. **Acceso a la aplicación:**
 
-- El servidor estará esperando conexiones en el puerto 8080 y el cliente intentará conectarse al servidor a través de la IP de 127.0.0.1.
+- El servidor estará esperando conexiones en el puerto 8080 y el cliente intentará conectarse al el.
 
 - El servidor escuchará en el puerto 8080 dentro de su contenedor.
 
-- El cliente, cuando se ejecute, intentará conectarse a 127.0.0.1:8080 (el servidor dentro del contenedor correspondiente).
+- El cliente, cuando se ejecute, intentará conectarse a servidor:8080 (el servidor dentro del contenedor correspondiente).
 
 - Si ambos servicios están configurados correctamente, el cliente debería poder enviar un mensaje al servidor y recibir una respuesta.
 
