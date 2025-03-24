@@ -1,18 +1,22 @@
 services:
- servidor:
-   build: ./servidor        # Ruta al Dockerfile del servidor
-   ports:
-     - "8080:8080"          # Mapea el puerto 8080 del contenedor al host
-   networks:
-     - red_cliente_servidor # Red que conecta ambos contenedores
+  servidor:
+    build: ./nodo
+    container_name: servidor
+    ports:
+      - "8080:8080"   # Mapea el puerto 8080 del contenedor al host
+    networks:
+      - red_cliente_servidor
+    command: java Nodo 0.0.0.0 8080 0.0.0.0 8081 # Dirección del servidor y puerto de escucha
 
-
- cliente:
-   build: ./cliente         # Ruta al Dockerfile del cliente
-   networks:
-     - red_cliente_servidor # Red que conecta ambos contenedores
-
+  cliente:
+    build: ./nodo
+    container_name: cliente
+    depends_on:
+      - servidor  # Asegura que el servidor esté en marcha antes de ejecutar el cliente
+    networks:
+      - red_cliente_servidor
+    command: java Nodo 0.0.0.0 8081 0.0.0.0 8080 # Dirección del cliente y puerto del servidor
 
 networks:
- red_cliente_servidor:
-   driver: bridge           # Usamos el driver bridge para la red
+  red_cliente_servidor:
+    driver: bridge
