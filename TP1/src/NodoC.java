@@ -10,7 +10,7 @@ public class NodoC {
 
     public static void main(String[] args) {
         if (args.length != 2) {
-            System.out.println("Uso: java NodoC <ip_d> <puerto_d>");
+            System.out.println("Uso: java NodoC <ip_nodoD> <puerto_nodoD>");
             return;
         }
 
@@ -73,6 +73,7 @@ public class NodoC {
         JsonObject saludo = new JsonObject();
         saludo.addProperty("mensaje", "Hola, soy un nodo C!");
         out.println(gson.toJson(saludo));
+        System.out.println("Saludo enviado a " + nodo.getIp() + ":" + nodo.getPuerto());
 
         // Leer la respuesta
         String respuestaJson = in.readLine();
@@ -92,7 +93,14 @@ public class NodoC {
             JsonObject nodoJson = nodosJson.get(i).getAsJsonObject();
             String ip = nodoJson.get("ip").getAsString();
             int puerto = nodoJson.get("puerto").getAsInt();
-            nodosC.add(new Contact(ip, puerto));
+            try{
+                if(ip != InetAddress.getLocalHost().getHostAddress()){
+                    nodosC.add(new Contact(ip, puerto));
+                }
+            }
+            catch (UnknownHostException e){
+                e.printStackTrace();
+            }
         }
         return nodosC;
     }

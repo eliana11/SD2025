@@ -26,6 +26,15 @@ services:
       - red_nodos
     command: java -cp nodo.jar:gson.jar NodoC nodoD 12347
 
+  nodoc3:
+    build: ./
+    container_name: nodoC3
+    depends_on:
+      - nodod
+    networks:
+      - red_nodos
+    command: java -cp nodo.jar:gson.jar NodoC nodoD 12347
+
 networks:
   red_nodos:
     driver: bridge

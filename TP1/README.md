@@ -22,7 +22,7 @@ Este proyecto incluye un servidor y un cliente, ambos implementados en Java y ej
 
 - docker compose up
 
-- En este hit se pide modificar el hit anterior para que los mensajes se envien en formato json, para poder ver esto, se incluye un print por consola especial que muestra el json sin desserializar.
+- En este hit se pide refactorizar el codigo para agregar un programa D, que funcione como registro de contactos, para probar esta funcionalidad se levantan tres nodos C, los cuales reciben como parametros la direccion ip y puerto en que escucha el nodo D, este nodo D, al recibir una nueva conexion de un nodo C, le informa los datos de conexion de cada uno de los nodos que conoce, de tal manera que cada nodo c pueda enviarse un saludo.
 
 3. **Acceso a la aplicación:**
 
