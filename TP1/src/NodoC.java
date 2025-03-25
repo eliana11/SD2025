@@ -7,6 +7,16 @@ import java.util.*;
 
 public class NodoC {
     private static Gson gson = new Gson(); // Instancia de Gson para serialización y deserialización
+    private final int puertoLocal; // Puerto en el que escucha el nodo C
+    private final String ipNodoD; // IP del nodo D
+    private final int puertoNodoD; // Puerto del nodo D
+    private List<Contact> nodosC = new ArrayList<>(); // Lista de nodos C registrados
+
+    public NodoC(int puertoLocal, String ipNodoD, int puertoNodoD) {
+        this.puertoLocal = puertoLocal;
+        this.ipNodoD = ipNodoD;
+        this.puertoNodoD = puertoNodoD;
+    }
 
     public static void main(String[] args) {
         if (args.length != 2) {
@@ -14,50 +24,69 @@ public class NodoC {
             return;
         }
 
-        // Parámetros proporcionados
-        String ipD = args[0];
-        int puertoD = Integer.parseInt(args[1]);
+        NodoC nodoC = new NodoC(10000 + (int)(Math.random() * 10000), args[0], Integer.parseInt(args[1]));
+        new Thread(() -> nodoC.iniciarEscucha()).start();
+        nodoC.iniciarEnD();
+    }
 
+    private void iniciarEscucha() {
         try {
-            // Generar un puerto aleatorio para el nodo C
-            int puertoC = 10000 + (int)(Math.random() * 10000);
-            ServerSocket serverSocket = new ServerSocket(puertoC);
-            System.out.println("Nodo C escuchando en puerto " + puertoC);
+            ServerSocket serverSocket = new ServerSocket(puertoLocal);
+            System.out.println("Nodo C escuchando en el puerto " + puertoLocal);
+            while (true) {
+                Socket socketCliente = serverSocket.accept();
+                System.out.println("Conexión recibida de: " + socketCliente.getInetAddress());
+                // Lógica para manejar la conexión
+                BufferedReader in = new BufferedReader(new InputStreamReader(socketCliente.getInputStream()));
+                String mensajeJson = in.readLine(); 
+                JsonObject mensaje = gson.fromJson(mensajeJson, JsonObject.class);
+                System.out.println("Mensaje recibido: " + mensaje.get("mensaje").getAsString());
+                // Responder al mensaje 
+                PrintWriter out = new PrintWriter(socketCliente.getOutputStream(), true);   
+                JsonObject respuesta = new JsonObject();
+                respuesta.addProperty("mensaje", "Hola, recibido, soy un nodo C!");
+                out.println(gson.toJson(respuesta));
+                // Cerrar la conexión
+                in.close();
+                out.close();
+                socketCliente.close();
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
 
-            // Conectar con Nodo D para registrarse
-            Socket socketD = new Socket(ipD, puertoD);
-            PrintWriter out = new PrintWriter(socketD.getOutputStream(), true);
-            BufferedReader in = new BufferedReader(new InputStreamReader(socketD.getInputStream()));
-
-            // Enviar la información del nodo C (IP y puerto)
+    private void iniciarEnD() {
+        try {
+            // Crear registro con datos del nodo C
             JsonObject registro = new JsonObject();
             registro.addProperty("ip", InetAddress.getLocalHost().getHostAddress());
-            registro.addProperty("puerto", puertoC);
+            registro.addProperty("puerto", puertoLocal);
+
+            // Conectar con Nodo D para registrarse
+            Socket socketD = new Socket(ipNodoD, puertoNodoD);
+            PrintWriter out = new PrintWriter(socketD.getOutputStream(), true);
+            
+            // Enviar la información del nodo C (IP y puerto)
             out.println(gson.toJson(registro));
+            
+            // Escuchar respuesta
+            BufferedReader in = new BufferedReader(new InputStreamReader(socketD.getInputStream()));
+            String mensaje = in.readLine();
+            System.out.println("Respuesta de D: " + mensaje);
 
-            // Recibir la lista de nodos C registrados desde D
-            String respuestaJson = in.readLine();
-            JsonObject respuesta = gson.fromJson(respuestaJson, JsonObject.class);
+            JsonObject respuesta = gson.fromJson(mensaje, JsonObject.class);
+
             JsonArray nodosJson = respuesta.getAsJsonArray("nodos");
-
+        
             // Parsear los nodos registrados y conectarse a cada uno para saludar
-            List<Contact> nodosC = parseNodos(nodosJson);
-            for (Contact nodo : nodosC) {
-                conectarYSaludar(nodo);
-            }
+            this.nodosC = parseNodos(nodosJson);
 
             // Cerrar conexiones con Nodo D
             in.close();
             out.close();
             socketD.close();
 
-            // Escuchar solicitudes de conexión de otros nodos
-            while (true) {
-                Socket socketCliente = serverSocket.accept();
-                System.out.println("Conexión recibida de: " + socketCliente.getInetAddress());
-                // Lógica para manejar la conexión
-                socketCliente.close();
-            }
         } catch (IOException e) {
             e.printStackTrace();
         }
