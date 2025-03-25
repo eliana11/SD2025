@@ -1,19 +1,30 @@
 services:
-  nodo1:
+  nodod:
     build: ./
-    container_name: nodo1
+    container_name: nodoD
     ports:
       - "8080:8080"   # Mapea el puerto 8080 del contenedor al host
     networks:
       - red_nodos
-    command: java -cp nodo.jar:gson.jar Nodo 8080 nodo2 8081 # Dirección del servidor y puerto de escucha
+    command: java -cp nodo.jar:gson.jar NodoD
 
-  nodo2:
+  nodoc1:
     build: ./
-    container_name: nodo2
+    container_name: nodoC1
+    depends_on:
+      - nodod
     networks:
       - red_nodos
-    command: java -cp nodo.jar:gson.jar Nodo 8081 nodo1 8080 # Dirección del cliente y puerto del servidor
+    command: java -cp nodo.jar:gson.jar NodoC nodoD 12347
+  
+  nodoc2:
+    build: ./
+    container_name: nodoC2
+    depends_on:
+      - nodod
+    networks:
+      - red_nodos
+    command: java -cp nodo.jar:gson.jar NodoC nodoD 12347
 
 networks:
   red_nodos:
