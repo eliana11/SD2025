@@ -20,11 +20,9 @@ Este proyecto incluye un servidor y un cliente, ambos implementados en Java y ej
 
 - docker compose build
 
-- En este hit se pide implementar la caracteristica de que un servidor siga funcionando en caso de que un cliente cierre la conexion, para ver esta caracteristica se puede levantar un servidor y multiples clientes:
+- docker compose up
 
-- docker compose up servidor (en una terminal)
-
-- docker compose up cliente (en otra terminal distinta) (se puede repetir multiples veces para visualizar la caracteristica)
+- En este hit se pide modificar el hit anterior para que los mensajes se envien en formato json, para poder ver esto, se incluye un print por consola especial que muestra el json sin desserializar.
 
 3. **Acceso a la aplicación:**
 
