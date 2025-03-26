@@ -1,155 +1,158 @@
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
-import com.google.gson.JsonArray;
+
 import java.io.*;
 import java.net.*;
-import java.util.*;
+import java.time.*;
+import java.time.format.DateTimeFormatter;
 
 public class NodoC {
-    private static Gson gson = new Gson(); // Instancia de Gson para serialización y deserialización
-    private final int puertoLocal; // Puerto en el que escucha el nodo C
-    private final String ipNodoD; // IP del nodo D
-    private final int puertoNodoD; // Puerto del nodo D
-    private List<Contact> nodosC = new ArrayList<>(); // Lista de nodos C registrados
+    private final int puertoLocal;
+    private final String ipNodoD;
+    private final int puertoNodoD;
+    private static final Gson gson = new Gson();
+    private static final ZoneId ZONA_ARGENTINA = ZoneId.of("America/Argentina/Buenos_Aires");
 
-    public NodoC(int puertoLocal, String ipNodoD, int puertoNodoD) {
-        this.puertoLocal = puertoLocal;
+    public NodoC(String ipNodoD, int puertoNodoD) {
+        this.puertoLocal = 10000 + (int)(Math.random() * 10000);
         this.ipNodoD = ipNodoD;
         this.puertoNodoD = puertoNodoD;
     }
 
-    public static void main(String[] args) {
-        if (args.length != 2) {
-            System.out.println("Uso: java NodoC <ip_nodoD> <puerto_nodoD>");
-            return;
-        }
-
-        NodoC nodoC = new NodoC(10000 + (int)(Math.random() * 10000), args[0], Integer.parseInt(args[1]));
-        new Thread(() -> nodoC.iniciarEscucha()).start();
-        nodoC.iniciarEnD();
-    }
-
-    private void iniciarEscucha() {
+    public void registrarEnNodoD() {
         try {
-            ServerSocket serverSocket = new ServerSocket(puertoLocal);
-            System.out.println("Nodo C escuchando en el puerto " + puertoLocal);
-            while (true) {
-                Socket socketCliente = serverSocket.accept();
-                System.out.println("Conexión recibida de: " + socketCliente.getInetAddress());
-                // Lógica para manejar la conexión
-                BufferedReader in = new BufferedReader(new InputStreamReader(socketCliente.getInputStream()));
-                String mensajeJson = in.readLine(); 
-                JsonObject mensaje = gson.fromJson(mensajeJson, JsonObject.class);
-                System.out.println("Mensaje recibido: " + mensaje.get("mensaje").getAsString());
-                // Responder al mensaje 
-                PrintWriter out = new PrintWriter(socketCliente.getOutputStream(), true);   
-                JsonObject respuesta = new JsonObject();
-                respuesta.addProperty("mensaje", "Hola, recibido, soy un nodo C!");
-                out.println(gson.toJson(respuesta));
-                // Cerrar la conexión
-                in.close();
-                out.close();
-                socketCliente.close();
+            JsonObject json = new JsonObject();
+            json.addProperty("ip", InetAddress.getLocalHost().getHostAddress());
+            json.addProperty("puerto", puertoLocal);
+            json.addProperty("horaRegistro", LocalTime.now(ZONA_ARGENTINA).format(DateTimeFormatter.ofPattern("HH:mm:ss")));
+
+            System.out.println("Enviando solicitud de inscripción a Nodo D: " + gson.toJson(json));
+
+            Socket socket = new Socket(ipNodoD, puertoNodoD);
+            PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
+            BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+            out.println(gson.toJson(json));
+            String response = in.readLine();
+            System.out.println("Respuesta de Nodo D: " + response);
+            JsonObject respuesta = gson.fromJson(response, JsonObject.class);
+            if (respuesta.has("ventana_asignada")) {
+                System.out.println("Nodo registrado para la ventana: " + respuesta.get("ventana_asignada").getAsString());
             }
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-    }
-
-    private void iniciarEnD() {
-        try {
-            // Crear registro con datos del nodo C
-            JsonObject registro = new JsonObject();
-            registro.addProperty("ip", InetAddress.getLocalHost().getHostAddress());
-            registro.addProperty("puerto", puertoLocal);
-
-            // Conectar con Nodo D para registrarse
-            Socket socketD = new Socket(ipNodoD, puertoNodoD);
-            PrintWriter out = new PrintWriter(socketD.getOutputStream(), true);
-            
-            // Enviar la información del nodo C (IP y puerto)
-            out.println(gson.toJson(registro));
-            
-            // Escuchar respuesta
-            BufferedReader in = new BufferedReader(new InputStreamReader(socketD.getInputStream()));
-            String mensaje = in.readLine();
-            System.out.println("Respuesta de D: " + mensaje);
-
-            JsonObject respuesta = gson.fromJson(mensaje, JsonObject.class);
-
-            JsonArray nodosJson = respuesta.getAsJsonArray("nodos");
-        
-            // Parsear los nodos registrados y conectarse a cada uno para saludar
-            this.nodosC = parseNodos(nodosJson);
-
-            // Cerrar conexiones con Nodo D
             in.close();
             out.close();
-            socketD.close();
-
-        } catch (IOException e) {
-            e.printStackTrace();
+            socket.close();
+        } catch (Exception e) {
+            System.err.println("Error registrando en D: " + e.getMessage());
         }
     }
 
-    // Conectarse a un nodo y saludar
-    private static void conectarYSaludar(Contact nodo) throws IOException {
-        Socket socket = new Socket(nodo.getIp(), nodo.getPuerto());
-        PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
-        BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-
-        // Enviar saludo
-        JsonObject saludo = new JsonObject();
-        saludo.addProperty("mensaje", "Hola, soy un nodo C!");
-        out.println(gson.toJson(saludo));
-        System.out.println("Saludo enviado a " + nodo.getIp() + ":" + nodo.getPuerto());
-
-        // Leer la respuesta
-        String respuestaJson = in.readLine();
-        JsonObject respuesta = gson.fromJson(respuestaJson, JsonObject.class);
-        System.out.println("Respuesta de " + nodo.getIp() + ":" + nodo.getPuerto() + " -> " + respuesta.get("mensaje").getAsString());
-
-        // Cerrar conexión
-        in.close();
-        out.close();
-        socket.close();
+    public void consultarInscripciones() {
+        try {
+            Socket socket = new Socket(ipNodoD, puertoNodoD);
+            PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
+            BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+            out.println("CONSULTAR_INSCRIPCIONES");
+            String response = in.readLine();
+            System.out.println("Inscripciones activas: " + response);
+            in.close();
+            out.close();
+            socket.close();
+        } catch (Exception e) {
+            System.err.println("Error consultando inscripciones: " + e.getMessage());
+        }
     }
 
-    // Parsear la lista de nodos C desde el JSON
-    private static List<Contact> parseNodos(JsonArray nodosJson) {
-        List<Contact> nodosC = new ArrayList<>();
-        for (int i = 0; i < nodosJson.size(); i++) {
-            JsonObject nodoJson = nodosJson.get(i).getAsJsonObject();
-            String ip = nodoJson.get("ip").getAsString();
-            int puerto = nodoJson.get("puerto").getAsInt();
-            try{
-                if(ip != InetAddress.getLocalHost().getHostAddress()){
-                    nodosC.add(new Contact(ip, puerto));
+    public void esperarVentana() {
+        int intento = 0;
+        int maxIntentos = 30; // Máximo de intentos de 30 (aproximadamente 5 minutos)
+        int tiempoEspera = 10000; // Tiempo inicial de espera 10 segundos
+    
+        try {
+            while (intento < maxIntentos) {
+                String inscripcionesActivas = obtenerInscripcionesActivas();
+                if (!inscripcionesActivas.isEmpty()) {
+                    System.out.println("Inscripciones activas: " + inscripcionesActivas);
+                    break;
                 }
+                
+                System.out.println("Esperando ventana... Intento #" + (intento + 1));
+    
+                // Incrementamos el tiempo de espera entre intentos
+                Thread.sleep(tiempoEspera);
+                tiempoEspera += 5000; // Aumentar el tiempo de espera en 5 segundos cada vez
+                intento++;
             }
-            catch (UnknownHostException e){
-                e.printStackTrace();
+    
+            if (intento == maxIntentos) {
+                System.out.println("No se han encontrado inscripciones activas después de " + maxIntentos + " intentos.");
             }
+    
+        } catch (InterruptedException e) {
+            System.err.println("Error en el sleep: " + e.getMessage());
         }
-        return nodosC;
+    }
+    
+    public String obtenerInscripcionesActivas(){
+        try{
+            Socket socket = new Socket(ipNodoD, puertoNodoD);
+            PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
+            BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+            out.println("CONSULTAR_INSCRIPCIONES");
+            String response = in.readLine();
+            in.close();
+            out.close();
+            socket.close();
+            return response;
+        }catch (Exception e){
+            System.err.println("Error consultando inscripciones: " + e.getMessage());
+            return "";
+        }
     }
 
-    // Clase para almacenar los contactos
-    static class Contact {
-        private String ip;
-        private int puerto;
-
-        public Contact(String ip, int puerto) {
-            this.ip = ip;
-            this.puerto = puerto;
+    public void recibirNotificacionVentana() {
+        try {
+            ServerSocket serverSocket = new ServerSocket(puertoLocal);
+            System.out.println("Esperando notificación de cambio de ventana...");
+            Socket clientSocket = serverSocket.accept();
+            BufferedReader in = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
+            
+            String mensaje = in.readLine();
+            JsonObject notificacion = gson.fromJson(mensaje, JsonObject.class);
+            
+            if (notificacion.has("mensaje")) {
+                System.out.println("Notificación recibida: " + notificacion.get("mensaje").getAsString());
+                
+                // Enviar saludo de vuelta a NodoD
+                String saludo = "¡Hola NodoD! Ventana actualizada correctamente.";
+                PrintWriter out = new PrintWriter(clientSocket.getOutputStream(), true);
+                out.println(saludo);
+                System.out.println("Saludo enviado a NodoD: " + saludo);
+                
+                out.close();
+            }
+            
+            in.close();
+            clientSocket.close();
+            serverSocket.close();
+        } catch (IOException e) {
+            System.err.println("Error en recibir notificación: " + e.getMessage());
         }
+    }
 
-        public String getIp() {
-            return ip;
+    public static void main(String[] args) {
+        if (args.length != 2) {
+            System.out.println("Uso: java Nodo <IP Nodo D> <Puerto Nodo D>");
+            return;
         }
-
-        public int getPuerto() {
-            return puerto;
-        }
+        String ipNodoD = args[0];
+        int puertoNodoD = Integer.parseInt(args[1]);
+    
+        NodoC nodo = new NodoC(ipNodoD, puertoNodoD);
+        nodo.registrarEnNodoD();
+        
+        // Iniciar el hilo para recibir notificaciones
+        new Thread(() -> nodo.recibirNotificacionVentana()).start();
+        
+        nodo.esperarVentana();
     }
 }
