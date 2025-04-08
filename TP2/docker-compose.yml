@@ -2,6 +2,8 @@ services:
   servidor:
     build:
       context: ./servidor
+    ports:
+      - "8000:8000"
     container_name: servidor
     networks:
       - red-tareas
