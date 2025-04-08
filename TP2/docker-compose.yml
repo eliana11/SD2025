@@ -1,0 +1,19 @@
+services:
+  servidor:
+    build:
+      context: ./servidor
+    container_name: servidor
+    networks:
+      - red-tareas
+
+  servicio-tarea:
+    build:
+      context: ./tarea
+    container_name: servicio-tarea
+    depends_on:
+      - servidor
+    networks:
+      - red-tareas
+
+networks:
+  red-tareas:
