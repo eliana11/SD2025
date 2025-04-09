@@ -40,6 +40,9 @@ class TareaHandler implements HttpHandler {
             JSONArray parametros = inputJson.getJSONArray("parametros");
             int delay = inputJson.optInt("delayMs", 1000);
 
+            System.out.println("📩 Tarea recibida: " + tarea + " con parámetros " + parametros.toString());
+
+
             double resultado = 0;
 
             switch (tarea) {

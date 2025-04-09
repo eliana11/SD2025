@@ -19,6 +19,7 @@ public class Servidor {
 
 class TaskHandler implements HttpHandler {
     public void handle(HttpExchange exchange) throws IOException {
+        System.out.println("📥 Nueva solicitud recibida: " + exchange.getRequestMethod() + " " + exchange.getRequestURI());
         if (!exchange.getRequestMethod().equalsIgnoreCase("POST")) {
             sendResponse(exchange, 405, "Método no permitido");
             return;
@@ -45,7 +46,7 @@ class TaskHandler implements HttpHandler {
             }
 
             // Llamar al contenedor del servicio tarea
-            URL url = new URL("http://servicio-tarea:8081/ejecutarTarea"); // nombre del contenedor
+            URL url = new URL("http://localhost:8081/ejecutarTarea"); // nombre del contenedor
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("POST");
             conn.setDoOutput(true);
