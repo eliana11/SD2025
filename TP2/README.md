@@ -10,6 +10,8 @@ curl -X POST http://localhost:8000/getRemoteTask -H "Content-Type: application/j
 
 Esta se puede editar para cambiar el nombre de la tarea (solamente hay dos disponibles: "sumar" y "multiplicar"), y los parametros (entre [], puede recibir n cualquiera de las dos tareas).
 
+Para facilitar toda esta tarea, se creó el programa Cliente.py, que al tener un servidor ejecutandose, y usar este programa, informará al usuario que tareas se encuentras disponibles, para que elija una e ingrese los parametros.
+
 
 **Falta**:
 - El servidor tambien tiene que dockerizarse.

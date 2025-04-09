@@ -58,18 +58,19 @@ if __name__ == "__main__":
             print("❌ Opción inválida.")
             exit()
 
-        # Podés cambiar estos parámetros según lo que cada contenedor espera
-        parametros = {}
+        parametros = []
 
         if nombre_tarea == "sumar":
-            a = int(input("Ingresá el primer número: "))
-            b = int(input("Ingresá el segundo número: "))
-            parametros = {"a": a, "b": b}
+            cantidad = int(input("¿Cuántos números querés sumar? "))
+            for i in range(cantidad):
+                n = int(input(f"Ingresá el número {i + 1}: "))
+                parametros.append(n)
 
         elif nombre_tarea == "multiplicar":
-            x = int(input("Ingresá el primer número: "))
-            y = int(input("Ingresá el segundo número: "))
-            parametros = {"x": x, "y": y}
+            cantidad = int(input("¿Cuántos números querés multiplicar? "))
+            for i in range(cantidad):
+                n = int(input(f"Ingresá el número {i + 1}: "))
+                parametros.append(n)
 
         else:
             print("⚠️ Tarea desconocida, se enviará sin parámetros extra.")
