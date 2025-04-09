@@ -25,8 +25,7 @@ class TaskHandler implements HttpHandler {
             return;
         }
 
-        InputStreamReader isr = new InputStreamReader(exchange.getRequestBody(), "utf-8");
-        BufferedReader br = new BufferedReader(isr);
+        BufferedReader br = new BufferedReader(new InputStreamReader(exchange.getRequestBody(), "utf-8"));
         StringBuilder sb = new StringBuilder();
         String line;
         while ((line = br.readLine()) != null) {
@@ -39,14 +38,40 @@ class TaskHandler implements HttpHandler {
             JSONObject input = new JSONObject(inputJson);
             String nombreTarea = input.getString("nombreTarea");
 
-            // Validación opcional: tarea válida
-            if (!nombreTarea.equals("sumar") && !nombreTarea.equals("promedio")) {
-                sendResponse(exchange, 404, "Tarea no encontrada");
-                return;
+            int puertoHost;
+            if (nombreTarea.equals("sumar")) {
+                puertoHost = 8081;
+            } else if (nombreTarea.equals("multiplicar")) {
+                puertoHost = 8082;
+            } else {
+                puertoHost = 8083; // o lanzar error
             }
 
-            // Llamar al contenedor del servicio tarea
-            URL url = new URL("http://localhost:8081/ejecutarTarea"); // nombre del contenedor
+            // Nombre del contenedor según la tarea
+            String contenedor = "bautista222221/" + nombreTarea + ":v1";
+            String containerName = "instancia_" + nombreTarea;
+
+            // Verificar si el contenedor ya está corriendo
+            Process check = Runtime.getRuntime().exec("docker ps -q -f name=" + containerName);
+            BufferedReader checkReader = new BufferedReader(new InputStreamReader(check.getInputStream()));
+            if (checkReader.readLine() == null) {
+                // Si no está corriendo, lo ejecuta
+                System.out.println("🚀 Lanzando contenedor: " + contenedor);
+                
+                Runtime.getRuntime().exec(new String[] {
+                    "docker", "run", "-d", "--rm",
+                    "--name", containerName,
+                    "-p", puertoHost +":8080", // El contenedor expone en 8080
+                    contenedor
+                });
+                // Espera unos segundos para que el contenedor esté listo
+                Thread.sleep(3000);
+            } else {
+                System.out.println("✅ Contenedor ya está corriendo.");
+            }
+
+            // Enviar POST al contenedor
+            URL url = new URL("http://localhost:"+puertoHost+"/" + nombreTarea);
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("POST");
             conn.setDoOutput(true);
@@ -57,22 +82,19 @@ class TaskHandler implements HttpHandler {
             os.flush();
             os.close();
 
-            // Leer respuesta del servicio tarea
             int responseCode = conn.getResponseCode();
-            BufferedReader in = new BufferedReader(
-                new InputStreamReader(conn.getInputStream()));
+            BufferedReader in = new BufferedReader(new InputStreamReader(conn.getInputStream()));
             String inputLine;
             StringBuilder responseSb = new StringBuilder();
-
             while ((inputLine = in.readLine()) != null) {
                 responseSb.append(inputLine);
             }
             in.close();
 
-            // Enviar respuesta al cliente original
             sendResponse(exchange, responseCode, responseSb.toString());
 
         } catch (Exception e) {
+            e.printStackTrace();
             sendResponse(exchange, 500, "Error al procesar la tarea: " + e.getMessage());
         }
     }
@@ -84,4 +106,3 @@ class TaskHandler implements HttpHandler {
         os.close();
     }
 }
-
