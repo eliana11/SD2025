@@ -16,3 +16,5 @@ Para facilitar toda esta tarea, se creó el programa Cliente.py, que al tener un
 **Falta**:
 - El servidor tambien tiene que dockerizarse.
 - Se pueden hacer mas tareas.
+
+(Nota: El servidor obtiene las tareas disponibles por medio de una peticion http a docker, obteniendo aquellas que se encuentran subidas por bautista222221, filtrando por todos los contenedores que inicien por tarea-..., por lo que para crear alguna tarea nueva tengo que hacerlo yo (bautista))
