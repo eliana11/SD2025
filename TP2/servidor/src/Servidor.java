@@ -61,6 +61,7 @@ class TaskHandler implements HttpHandler {
                 Runtime.getRuntime().exec(new String[] {
                     "docker", "run", "-d", "--rm",
                     "--name", containerName,
+                    "--network", "tp2_red-tareas",
                     "-p", puertoHost + ":8080",
                     contenedor
                 });
@@ -84,9 +85,9 @@ class TaskHandler implements HttpHandler {
             if (input.has("delayMs")) {
                 jsonToSend.put("delayMs", input.getInt("delayMs"));
             }
-
+            
             // Enviar POST al contenedor
-            URL url = new URL("http://localhost:" + puertoHost + "/" + nombreTarea);
+            URL url = new URL("http://" + containerName + ":8080/" + nombreTarea);
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("POST");
             conn.setDoOutput(true);

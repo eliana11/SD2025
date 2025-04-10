@@ -1,21 +1,16 @@
 services:
   servidor:
-    build:
-      context: ./servidor
+    build: ./servidor
+    container_name: servidor-tareas
     ports:
       - "8000:8000"
-    container_name: servidor
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - red-tareas
-
-  servicio-tarea:
-    build:
-      context: ./tarea
-    container_name: servicio-tarea
-    depends_on:
-      - servidor
-    networks:
-      - red-tareas
+    environment:
+      - JAVA_TOOL_OPTIONS=-Dfile.encoding=UTF-8  # Opcional, para evitar problemas de encoding
 
 networks:
   red-tareas:
+    driver: bridge
