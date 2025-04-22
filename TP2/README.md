@@ -1,34 +1,46 @@
 Desarrollamos un sistema cliente-servidor para la ejecución de tareas genéricas utilizando tecnología HTTP y contenedores Docker
 
-El servidor fue implementado en Java, utilizando el paquete com.sun.net.httpserver.* para crear un servidor HTTP que escucha en el puerto 8000.
+Diseño de Arquitectura
 
-Tiene dos endpoints:
+El sistema se compone de tres partes principales:
 
-    /getRemoteTask:
+    Cliente: Interfaz que consulta tareas disponibles y ejecuta una seleccionada.
 
-        Recibe solicitudes POST con los parámetros y nombre de la tarea.
+    Servidor: Recibe la solicitud, levanta un contenedor Docker con la tarea y delega la ejecución.
 
-        Determina el puerto interno y la imagen Docker que se necesita.
+    Servicio Tarea: Imagen Docker con un servidor web que ejecuta la lógica de una tarea.
 
-        Lanza un contenedor (si no está ya corriendo) con:
+Implementación del Servidor
 
-            Nombre dinámico (instancia_nombreTarea)
+    Implementado en Java utilizando com.sun.net.httpserver.*
 
-            Imagen correspondiente (bautista222221/tarea-nombre:v1)
+    Corre en el puerto 8000.
 
-            Red de Docker compartida para comunicación (tp2_red-tareas)
+    Expuestos dos endpoints:
 
-        Envía una solicitud al servicio tarea 
+/getRemoteTask
 
-        Espera la respuesta del contenedor y la devuelve al cliente.
+    Método: POST
 
-    /tareasDisponibles:
+    Entrada: JSON con nombreTarea y parametros.
 
-        Realiza una consulta a la API de Docker Hub sobre el repositorio del grupo.
+    Procesos:
 
-        Filtra las imágenes que comienzan con tarea-.
+        Determina el puerto interno y la imagen Docker.
 
-        Devuelve un listado de tareas disponibles en formato JSON.
+        Lanza el contenedor si no está corriendo (usando docker run con nombre dinámico, imagen, y red tp2_red-tareas).
+
+        Envía la solicitud HTTP al contenedor (puerto 8080).
+
+        Devuelve la respuesta al cliente.
+
+/tareasDisponibles
+
+    Método: GET
+
+    Consulta a Docker Hub por imágenes publicadas por bautista222221 con el prefijo tarea-.
+
+    Devuelve un JSON con la lista de tareas disponibles.
 
 Este diseño desacopla completamente al servidor de las tareas específicas, permitiendo agregar nuevas sin modificar su lógica.
 
@@ -44,25 +56,39 @@ Esta se puede editar para cambiar el nombre de la tarea (solamente hay dos dispo
 
 Para facilitar toda esta tarea, se creó el programa Cliente.py, que al tener un servidor ejecutandose, y usar este programa, informará al usuario que tareas se encuentras disponibles, para que elija una e ingrese los parametros.
 
-El cliente tiene dos funcionalidades:
+Cliente
 
-    Obtener las tareas disponibles: Consulta al servidor el listado de imágenes Docker publicadas en Docker Hub con prefijo "tarea-". Esto se hace a través del endpoint /tareasDisponibles.
+    Script en Python: Cliente.py
 
-    Enviar una tarea para su ejecución: Mediante una solicitud POST al endpoint /getRemoteTask, se envían:
+    Funcionalidades:
 
-        El nombre de la tarea (por ejemplo "sumar" o "multiplicar").
+        Obtener tareas disponibles (GET /tareasDisponibles)
 
-        Los parámetros necesarios (una lista de números).
+        Enviar tarea a ejecutar (POST /getRemoteTask con JSON)
 
-Todo esto se empaqueta en formato JSON, cumpliendo con la consigna dada.
+El cliente guía al usuario:
 
-Cada tarea está empaquetada como una imagen Docker separada. Estas imágenes:
+    Muestra tareas disponibles.
 
-    Corren un servidor web que escucha en el puerto 8080.
+    Pide nombre de tarea y parámetros.
 
-    Implementan un endpoint con el nombre de la tarea.
+    Muestra resultado.
 
-    Reciben parámetros en formato JSON y responden con el resultado.
+Desarrollo del Servicio Tarea
+
+    Cada tarea está empaquetada como una imagen Docker distinta (por ejemplo, bautista222221/tarea-sumar:v1).
+
+    Corre un servidor HTTP en el puerto 8080.
+
+    Expuesto el endpoint /ejecutarTarea:
+
+        Recibe un JSON con parámetros.
+
+        Ejecuta la tarea.
+
+        Devuelve el resultado en JSON.
+
+    Publicadas en Docker Hub para que puedan ser levantadas por el servidor dinámicamente.
 
 **Posible mejora**:
 - Se pueden hacer mas tareas.
