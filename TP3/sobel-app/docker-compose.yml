@@ -1,0 +1,10 @@
+
+services:
+  sobel:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sobel-filter
+    volumes:
+      - .:/app
+    entrypoint: ["python", "sobel.py", "logoUnlu.png", "logoUnlu_salida.jpg"]
