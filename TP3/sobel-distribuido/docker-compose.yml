@@ -1,0 +1,43 @@
+services:
+  coordinador:
+    build: .
+    volumes:
+      - .:/app
+    command: python coordinador.py imagenEntrada.jpg output/final.jpg 4
+    depends_on:
+      - worker1
+      - worker2
+      - worker3
+      - worker4
+
+  worker1:
+    build: .
+    volumes:
+      - .:/app
+    command: python trabajador.py
+    environment:
+      - WORKER_ID=0
+
+  worker2:
+    build: .
+    volumes:
+      - .:/app
+    command: python trabajador.py
+    environment:
+      - WORKER_ID=1
+
+  worker3:
+    build: .
+    volumes:
+      - .:/app
+    command: python trabajador.py
+    environment:
+      - WORKER_ID=2
+
+  worker4:
+    build: .
+    volumes:
+      - .:/app
+    command: python trabajador.py
+    environment:
+      - WORKER_ID=3
