@@ -1,43 +1,41 @@
 services:
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+      RABBITMQ_DEFAULT_VHOST: "/"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+      - ./rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf
+
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+
   coordinador:
-    build: .
+    build: ./coordinador
+    command: ["images/imagenEntrada.jpg", "images/output/imagenSalida.jpg", "4"]  # imagen, salida, 4 partes
     volumes:
-      - .:/app
-    command: python coordinador.py imagenEntrada.jpg output/final.jpg 4
+      - ./images:/app/images               # acceso a las imágenes
     depends_on:
-      - worker1
-      - worker2
-      - worker3
-      - worker4
+      - rabbitmq
+      - redis
 
-  worker1:
-    build: .
+  worker:
+    build: ./worker
+    deploy:
+      replicas: 4
+    depends_on:
+      - rabbitmq
+      - redis
     volumes:
-      - .:/app
-    command: python trabajador.py
-    environment:
-      - WORKER_ID=0
+      - ./images:/app/images
 
-  worker2:
-    build: .
-    volumes:
-      - .:/app
-    command: python trabajador.py
-    environment:
-      - WORKER_ID=1
-
-  worker3:
-    build: .
-    volumes:
-      - .:/app
-    command: python trabajador.py
-    environment:
-      - WORKER_ID=2
-
-  worker4:
-    build: .
-    volumes:
-      - .:/app
-    command: python trabajador.py
-    environment:
-      - WORKER_ID=3
+volumes:
+  rabbitmq_data:
