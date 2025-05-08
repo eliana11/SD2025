@@ -21,7 +21,7 @@ def dividir_imagen(imagen, n):
 def unir_imagenes(partes):
     return np.vstack(partes)
 
-def conectar_rabbitmq(reintentos=5, espera=5):
+def conectar_rabbitmq(reintentos=5, espera=10):
     for i in range(reintentos):
         try:
             connection = pika.BlockingConnection(pika.ConnectionParameters(
@@ -71,14 +71,13 @@ def esperar_resultados_redis(n):
     return partes_procesadas
 
 def main():
-    if len(sys.argv) < 3:
-        print("Uso: python coordinador.py <input> <output>")
+    if len(sys.argv) != 4:
+        print("Uso: python coordinador.py <input> <output> <nro workers>")
         return
 
     input_path = sys.argv[1]
     output_path = sys.argv[2]
-
-    n = 4  # o el número de workers que tengas
+    n = int(sys.argv[3])
 
     img = cv2.imread(input_path, cv2.IMREAD_GRAYSCALE)
     partes = dividir_imagen(img, n)

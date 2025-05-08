@@ -20,17 +20,19 @@ services:
 
   coordinador:
     build: ./coordinador
-    command: ["images/imagenEntrada.jpg", "images/output/imagenSalida.jpg", "4"]  # imagen, salida, 4 partes
+    command: ["images/logos.jpg", "images/output/salidaLogos.jpg", "${NUM_WORKERS}"]  # imagen, salida, cantidad de workers
     volumes:
       - ./images:/app/images               # acceso a las imágenes
     depends_on:
       - rabbitmq
       - redis
+    environment:
+      NUM_WORKERS: ${NUM_WORKERS}
 
   worker:
     build: ./worker
     deploy:
-      replicas: 4
+      replicas: ${NUM_WORKERS}
     depends_on:
       - rabbitmq
       - redis

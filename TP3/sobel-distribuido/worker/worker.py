@@ -36,7 +36,7 @@ def procesar_tarea(ch, method, properties, body):
 
     print(f"Worker procesó chunk {chunk_id}")
 
-def conectar_rabbitmq(reintentos=5, espera=5):
+def conectar_rabbitmq(reintentos=5, espera=10):
     for i in range(reintentos):
         try:
             connection = pika.BlockingConnection(pika.ConnectionParameters(
