@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coordinador
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: coordinador
+  template:
+    metadata:
+      labels:
+        app: coordinador
+    spec:
+      containers:
+      - name: coordinador
+        image: bautista222221/coordinador:latest
+        ports:
+        - containerPort: 80
+        env:
+        - name: FLASK_ENV
+          value: "development"
+        - name: NUM_WORKERS
+          valueFrom:
+            configMapKeyRef:
+              name: coordinador-config
+              key: NUM_WORKERS
+      volumes:
+      - name: images
+        hostPath:
+          path: /path/to/images
+          type: Directory
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: coordinador-service
+spec:
+  selector:
+    app: coordinador
+  type: LoadBalancer
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 80

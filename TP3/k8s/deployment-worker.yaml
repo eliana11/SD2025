@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+spec:
+  replicas: 3  # Se puede ajustar según tus necesidades
+  selector:
+    matchLabels:
+      app: worker
+  template:
+    metadata:
+      labels:
+        app: worker
+    spec:
+      containers:
+      - name: worker
+        image: bautista222221/worker:latest
+        env:
+        - name: RABBITMQ_URL
+          value: "rabbitmq:5672"
+        - name: REDIS_URL
+          value: "redis:6379"
+      volumes:
+      - name: images
+        hostPath:
+          path: /path/to/images
+          type: Directory
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: worker-service
+spec:
+  selector:
+    app: worker
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 80

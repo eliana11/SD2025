@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: coordinator-service
+spec:
+  selector:
+    app: coordinator
+  ports:
+  - protocol: TCP
+    port: 80  # Ajusta el puerto de acceso
+    targetPort: 80  # Ajusta el puerto de acceso dentro del contenedor
+  type: LoadBalancer  # Si necesitas exponer el servicio fuera del clúster

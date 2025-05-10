@@ -7,7 +7,7 @@ Diseñar e implementar una solución distribuida basada en contenedores que perm
 ## Estructura del Repositorio
 
 ```
-tp2-sistemas-distribuidos/
+TP3/
 ├── sobel-distribuido/
 │   ├── coordinador/
 │   ├── worker/
