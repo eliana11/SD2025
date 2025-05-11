@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coordinador-config
+  namespace: sistemas-distribuidos
+data:
+  NUM_WORKERS: "3"  # Ajusta este valor según tus necesidades

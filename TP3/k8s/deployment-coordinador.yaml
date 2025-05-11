@@ -20,26 +20,8 @@ spec:
         env:
         - name: FLASK_ENV
           value: "development"
-        - name: NUM_WORKERS
+        - name: 3
           valueFrom:
             configMapKeyRef:
               name: coordinador-config
               key: NUM_WORKERS
-      volumes:
-      - name: images
-        hostPath:
-          path: /path/to/images
-          type: Directory
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: coordinador-service
-spec:
-  selector:
-    app: coordinador
-  type: LoadBalancer
-  ports:
-  - protocol: TCP
-    port: 80
-    targetPort: 80

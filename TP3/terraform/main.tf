@@ -5,7 +5,7 @@ provider "google" {
 }
 
 resource "google_container_cluster" "primary" {
-  name     = "simple-gke-cluster"
+  name     = "cluster-sd"
   location = var.zone
 
   remove_default_node_pool = true
@@ -32,6 +32,6 @@ resource "google_container_node_pool" "primary_nodes" {
 
   autoscaling {
     min_node_count = 1
-    max_node_count = 1
+    max_node_count = 2
   }
 }
