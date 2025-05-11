@@ -68,3 +68,87 @@ docker-compose up --build
 ```
 
 3. La imagen procesada estará en: `images/output/salidaLogos.jpg`
+
+# HIT 2: Sobel con Offloading en la Nube
+
+## Objetivo General
+
+Implementar una solución elástica para aplicar el filtro Sobel sobre imágenes, utilizando infraestructura en la nube que se escala dinámicamente mediante Terraform. El objetivo es construir un sistema híbrido donde los nodos de procesamiento se crean sólo cuando hay trabajo que ejecutar, y se destruyen automáticamente al finalizar.
+
+---
+
+## Estructura del Repositorio
+
+/tp3-sistemas-distribuidos/
+├── coordinador/  
+├── terraform/  
+├── worker/  
+├── imágenes/  
+├── scripts/  
+├── .github/workflows/  
+├── docker-compose.yml  
+├── README.md  
+└── informe-final.pdf  
+
+---
+
+## 1. Diseño de Arquitectura
+
+El sistema está compuesto por:
+
+- **Coordinador (local o remoto)**: Recibe la imagen, la divide y gestiona la ejecución de tareas.
+- **Terraform**: Despliega dinámicamente nodos EC2 en la nube para realizar el procesamiento.
+- **Workers efímeros**: Ejecutan la tarea Sobel en contenedores Docker dentro de instancias creadas al momento.
+- **Almacenamiento temporal (opcional)**: Para compartir resultados si no hay comunicación directa con el coordinador.
+
+## 2. Provisionamiento Automático con Terraform
+
+Terraform se encarga de:
+
+- Crear instancias EC2 configuradas con:
+  - Docker
+  - Python
+  - Utilidades necesarias para correr el filtro Sobel
+- Ejecutar un `user_data` que:
+  - Instala dependencias automáticamente
+  - Descarga la imagen Docker del worker desde Docker Hub
+  - Ejecuta el contenedor con los parámetros adecuados
+  - Conecta el worker al cluster o sistema de mensajería
+
+---
+
+## 3. Ejecución del Filtro Sobel
+
+1. El coordinador detecta la necesidad de procesar una imagen.
+2. Se activa Terraform para desplegar nuevos workers.
+3. Cada worker ejecuta su parte de la tarea en contenedor.
+4. Los resultados se consolidan en el coordinador.
+5. Las instancias EC2 se eliminan automáticamente al finalizar.
+
+---
+
+## 4. Arquitectura Escalable Híbrida
+
+Esta arquitectura permite escalar horizontalmente de forma automática según la demanda. No se requieren nodos de procesamiento activos permanentemente, lo que representa un ahorro de recursos y mayor eficiencia.
+
+Se eligió una solución **híbrida** porque:
+- Permite mantener un coordinador fijo (local o remoto).
+- Crea infraestructura temporal en la nube para procesamiento intensivo.
+
+---
+
+## 5. Consideraciones Técnicas
+
+- El filtro Sobel se encuentra empaquetado en una imagen Docker publicada en Docker Hub.
+- Las instancias EC2 son configuradas mediante `user_data` para su autoaprovisionamiento.
+- El sistema puede ampliarse para utilizar colas de trabajo (RabbitMQ) o almacenamiento compartido si se desea mayor desacoplamiento.
+
+---
+
+## 6. Resultados
+
+- El sistema fue probado con múltiples imágenes, generando instancias bajo demanda que ejecutan la tarea correctamente.
+- Se verificó la elasticidad: los nodos se crean sólo cuando hay tarea, y se destruyen automáticamente luego.
+- La solución demostró ser eficiente, reproducible y escalable.
+
+---
