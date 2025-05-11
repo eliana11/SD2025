@@ -101,6 +101,9 @@ El sistema está compuesto por:
 - **Workers efímeros**: Ejecutan la tarea Sobel en contenedores Docker dentro de instancias creadas al momento.
 - **Almacenamiento temporal (opcional)**: Para compartir resultados si no hay comunicación directa con el coordinador.
 
+**Diagrama de arquitectura**:
+https://drive.google.com/file/d/1F6jdSoQEtzfKooSY1JW5VBDSKBiNWB0z/view?usp=sharing
+
 ## 2. Provisionamiento Automático con Terraform
 
 Terraform se encarga de:
