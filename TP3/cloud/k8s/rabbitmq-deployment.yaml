@@ -25,17 +25,11 @@ spec:
           value: "guest"
         - name: RABBITMQ_DEFAULT_PASS
           value: "guest"
-        volumeMounts:
-        - name: rabbitmq-storage
-          mountPath: /var/lib/rabbitmq
-        - name: rabbitmq-config
-          mountPath: /etc/rabbitmq
-          subPath: rabbitmq.conf
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: rabbitmq
+  name: rabbitmq-service
 spec:
   selector:
     app: rabbitmq
@@ -48,4 +42,4 @@ spec:
     protocol: TCP
     port: 15672
     targetPort: 15672
-  type: ClusterIP
+  type: LoadBalancer

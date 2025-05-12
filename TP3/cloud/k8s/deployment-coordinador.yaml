@@ -20,8 +20,6 @@ spec:
         env:
         - name: FLASK_ENV
           value: "development"
-        - name: NUM_WORKERS
-          value: "8"
 ---
 apiVersion: v1
 kind: Service

@@ -13,26 +13,23 @@ Diseñar e implementar una solución distribuida basada en contenedores que perm
 
 ```
 TP3/
-├── k8s/
-│   ├── deployment-coordinador.yaml
-│   ├── deployment-worker.yaml
-│   ├── deployment-rabbitmq.yaml
-│   ├── deployment-redis.yaml
-│   ├── deployment-coordinador.yaml
-├── sobel-app/
-│   ├── sobel.py
-│   ├── Dockerfile
-│   ├── docker-compose.yml
-│   ├── requirements.txt
-├── sobel-distribuido/
-│   ├── coordinador/
-│   ├── worker/
-│   ├── images/
-│   ├── rabbitmq.conf
-│   ├── docker-compose.yml
-├── terraform/
-│   ├── main.tf
-│   ├── variables.tf
+├── cloud/ 
+│   ├── firewalls/
+│   │   ├── firewalls.tf
+│   │   ├── providers.tf
+│   │   ├── variables.tf
+│   ├── gke/
+│   │   ├── firewalls.tf
+│   │   ├── providers.tf
+│   │   ├── variables.tf
+│   ├── k8s/
+│   │   ├── firewalls.tf
+│   │   ├── providers.tf
+│   │   ├── variables.tf
+│   ├── workers/
+│   │   ├── firewalls.tf
+│   │   ├── providers.tf
+│   │   ├── variables.tf
 ├── README.md
 ```
 
@@ -45,13 +42,13 @@ La arquitectura está compuesta por cuatro componentes principales:
 * **RabbitMQ**: actúa como broker de mensajes para comunicar coordinador y workers.
 * **Redis**: actúa como almacenamiento de los chunks de imagen, con un par ChunkId:Valor, donde el ChunkID es el identificador respectivo a cada trozo de la imagen, y valor es el resultado en Base 64 de la aplicacion del filtro Sobel.
 
-Los componentes están contenerizados y orquestados mediante `docker-compose`. El paso de parámetros y resultados se realiza vía colas de RabbitMQ y bases de datos Redis.
-
 Para este Hit se agrega el offloading en gcp, el cual, para llevarse a cabo requiere de Terraform y Kubernetes.
 
-* Se implementó un cluster en la plataforma cloud de Google (GCP) por medio de Terraform, definiendo el cluster primario donde se cargarán los pods que desarrollan las diferentes tareas (Archivo terraform/main.tf).
+* Se implementó un cluster en la plataforma cloud de Google (GCP) por medio de Terraform, definiendo el cluster primario donde se cargarán los pods que desarrollan las diferentes tareas (Archivo t/main.tf).
 
 * Con el cluster ya creado, se obtienen las credenciales de kubernetes y se realiza el despliegue de todos los servicios mencionados anteriormente (archivos .yaml en k8s/). 
+
+* Por ultimo, se deben levantar los workers y firewalls, ubicados en sus respectivos directorios.
 
 ## 2. Implementación del Servidor (Coordinador)
 
