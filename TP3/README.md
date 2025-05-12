@@ -50,6 +50,7 @@ Para este Hit se agrega el offloading en gcp, el cual, para llevarse a cabo requ
 
 * Por ultimo, se deben levantar los workers y firewalls, ubicados en sus respectivos directorios.
 
+
 ## 2. Implementación del Servidor (Coordinador)
 
 * Lenguaje: Python 3
@@ -116,3 +117,46 @@ El funcionamiento del programa se modificará lo menos posible a fin de posibili
 ## Modificaciones al funcionamiento:
 
 - Ahora el coordinador no recibe como parametros la imagen, salida y workers a utilizar, sino que levanta un servicio web muy simple, donde se puede cargar la imagen e indicar la cantidad de workers, esta web opera en el puerto 80, en la direccion ip asignada por gcp, el resto del funcionamiento se mantiene igual.
+
+## Pipelines de Despliegue
+
+Para facilitar un despliegue reproducible y automatizado de la infraestructura y las aplicaciones, se definieron los siguientes pipelines lógicos:
+
+### Pipeline 1: Construcción del Clúster GKE
+- Utiliza Terraform para crear el clúster GKE en Google Cloud Platform.
+- Se definen los nodos, reglas de firewall y permisos necesarios.
+
+### Pipeline 1.1: Servicios de Infraestructura
+- Despliegue de servicios esenciales mediante archivos YAML:
+  - **Redis**: almacenamiento temporal de resultados.
+  - **RabbitMQ**: sistema de colas para orquestación.
+
+### Pipeline 1.2: Aplicaciones del Sistema
+- Despliegue de contenedores para:
+  - **Coordinador**: recibe imagen, la divide, envía tareas a RabbitMQ y reconstruye el resultado desde Redis.
+  - **Workers**: aplican el filtro Sobel sobre fragmentos de imagen.
+
+## Análisis de Desempeño Bajo Carga
+
+Este análisis evalúa el comportamiento de la plataforma desarrollada en HIT3 al someterla a distintas combinaciones de carga
+
+Variable	Descripción
+V1 - Tamaño de los datos	Imágenes de 1 KB, 10 KB, 1 MB, 10 MB y 100 MB
+V2 - Peticiones concurrentes	1, 5, 10, 25, 50 solicitudes simultáneas
+V3 - Cantidad de workers	1, 2, 5, 10 VMs procesando
+
+Resultados
+Tamaño Imagen (V1)	Concurrencia (V2)	Workers (V3)	Tiempo Promedio (ms)	Tiempo Máx (ms)
+1 KB	1	1	120	130
+10 KB 10 2 860 1170
+1 MB	10	3	800	900
+10 MB	10	1	4000	5500
+100 MB	5	2	7000	8500
+
+Conclusiones
+
+    La plataforma responde de forma escalable al aumentar la cantidad de workers.
+
+    La carga del sistema se distribuye adecuadamente gracias al uso de Redis y RabbitMQ.
+
+    El tamaño de los datos tiene impacto lineal en la latencia, pero el sistema soporta cargas altas sin caídas.
