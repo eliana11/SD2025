@@ -1,10 +1,5 @@
 # Trabajo Práctico N.º 3 - Computación en la Nube (Kubernetes / RabbitMQ)
 
-## Nota Importante
-
-Es muy posible que este hit no funcione a la hora de intentar levantarlo, esto se debe a que las imagenes de docker utilizadas estan subidas a docker hub, y automaticamente descarga la version :latest, por lo que a futuro, si la forma de operar estas se modifica, el funcionamiento de este despliegue cloud se vera comprometido.
-En caso que no funcione el despliegue, el programa puede ejecutarse de la misma manera que el hit anterior (docker compose).
-
 ## Objetivo General
 
 Diseñar e implementar una solución distribuida basada en contenedores que permita ejecutar tareas genéricas de forma remota. En este caso, la tarea implementada consiste en aplicar un **filtro Sobel** a una imagen de entrada, dividiendo el trabajo entre varios contenedores y utilizando RabbitMQ para coordinar el procesamiento paralelo. Se utilizaron tecnologías como Docker, Python, RabbitMQ, y Docker Compose.
