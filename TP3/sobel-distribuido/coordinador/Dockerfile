@@ -15,7 +15,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copia el código
 COPY . .
 
-EXPOSE 80
-
 # CMD que permite pasar argumentos desde docker-compose
 ENTRYPOINT ["python", "coordinador.py"]

@@ -8,15 +8,17 @@ Diseñar e implementar una solución distribuida basada en contenedores que perm
 
 ```
 TP3/
+├── sobel-app/
+│   ├── sobel.py
+│   ├── Dockerfile
+│   ├── docker-compose.yml
+│   ├── requirements.txt
 ├── sobel-distribuido/
 │   ├── coordinador/
 │   ├── worker/
 │   ├── images/
 │   ├── rabbitmq.conf
 │   ├── docker-compose.yml
-├── sobel-app/
-│   ├── sobel.py
-│   ├── Dockerfile
 ├── informe-final.pdf
 ├── README.md
 ```
@@ -25,34 +27,27 @@ TP3/
 
 La arquitectura está compuesta por tres componentes principales:
 
-* **Coordinador**: recibe una imagen de entrada, la divide en partes y las envía a los workers usando RabbitMQ.
-* **Workers**: cada uno recibe una porción de imagen, aplica el filtro Sobel y devuelve el resultado.
+* **Coordinador**: recibe una imagen de entrada, la divide en partes y las envía a los workers por medio de una cola de RabbitMQ llamada "tareas" en formato Base64 para que pueda ser interpretada como texto, junto a la imagen se envia un respectivo Chunk ID, para poder identificarlo a la hora de reconstruir la imagen.
+* **Workers**: cada uno se suscribe a la cola "tareas" de RabbitMQ, donde recibe una porción de imagen, la decodifica, aplica el filtro Sobel y publica el resultado en una base de datos Redis, identificandola con el ID del Chunk (Tambien codificado en base 64).
 * **RabbitMQ**: actúa como broker de mensajes para comunicar coordinador y workers.
+* **Redis**: actúa como almacenamiento de los chunks de imagen, con un par ChunkId:Valor, donde el ChunkID es el identificador respectivo a cada trozo de la imagen, y valor es el resultado en Base 64 de la aplicacion del filtro Sobel.
 
-Los componentes están contenerizados y orquestados mediante `docker-compose`. El paso de parámetros y resultados se realiza vía mensajes JSON y colas de RabbitMQ.
+Los componentes están contenerizados y orquestados mediante `docker-compose`. El paso de parámetros y resultados se realiza vía colas de RabbitMQ y bases de datos Redis.
 
 ## 2. Implementación del Servidor (Coordinador)
 
 * Lenguaje: Python 3
 * Ejecuta el archivo `coordinador.py`.
 * Recibe una imagen, la divide en partes y las coloca en una cola de RabbitMQ.
-* Espera los resultados procesados por los workers y reconstruye la imagen final.
+* Espera los resultados procesados por los workers leyendo la base de datos Redis hasta encontrar todas las partes de la imagen, momento en que reconstruye la imagen final.
 
 ## 3. Desarrollo del Servicio Tarea (Worker)
 
 * Lenguaje: Python 3
 * Ejecuta el archivo `worker.py` dentro de un contenedor Docker.
-* Espera mensajes con partes de la imagen, aplica el filtro Sobel, y envía el resultado.
-* El filtro Sobel está implementado en el módulo `sobel-app/sobel.py`.
+* Espera mensajes con partes de la imagen en una cola RabbitMQ a la que se suscribe, decodifica la imagen, aplica el filtro Sobel, codifica nuevamente, y publica el resultado en redis.
 
-##  4. Cliente
-
-* El cliente está implícito en la acción del coordinador, quien inicia el proceso completo.
-* Se puede lanzar el sistema completo con Docker Compose.
-* La imagen procesada se guarda en `images/output/`.
-
-
-## 5. Compilación y Ejecución
+## 4. Compilación y Ejecución
 
 1. Clonar el repositorio
 
@@ -61,97 +56,27 @@ git clone <repo-url>
 cd tp2-sistemas-distribuidos/sobel-distribuido
 ```
 
-2. Ejecutar con Docker Compose
+2. En este punto, si se quisiera cambiar la imagen a la que se le aplica el filtro de sobel, se debe modificar el archivo docker-compose.yml, en la linea 23:
+```bash
+command: ["images/logos.jpg", "images/output/salidaLogos.jpg", "${NUM_WORKERS}"]  # imagen, salida, cantidad de workers
+```
+Donde el primer parametro es la ruta a la imagen a la que se le aplica el filtro, el segundo la ruta de salida donde se guarda la imagen resultado, y el tercero el numero de workers en los que se ditribuye la imagen, este parametro se guarda y modifica en el archivo .env.
+
+3. Ejecutar con Docker Compose
 
 ```bash
 docker-compose up --build
 ```
 
-3. La imagen procesada estará en: `images/output/salidaLogos.jpg`
+4. La imagen procesada estará en la ruta indicada como segundo parametro en el docker-compose.
 
-# HIT 2: Sobel con Offloading en la Nube
 
-## Objetivo General
+Nota: El repositorio ya viene con algunas imagenes de prueba.
 
-Implementar una solución elástica para aplicar el filtro Sobel sobre imágenes, utilizando infraestructura en la nube que se escala dinámicamente mediante Terraform. El objetivo es construir un sistema híbrido donde los nodos de procesamiento se crean sólo cuando hay trabajo que ejecutar, y se destruyen automáticamente al finalizar.
+## 6. Video Explicativo
 
----
+Creamos un video explicativo del funcionamiento general del programa con una demostracion del resultado final del procesamiento de una imagen.
 
-## Estructura del Repositorio
+https://drive.google.com/file/d/1pdLQDNIgUK5oxtYfljEDU0AEpukmDo6I/view?usp=sharing
 
-/tp3-sistemas-distribuidos/
-├── coordinador/  
-├── terraform/  
-├── worker/  
-├── imágenes/  
-├── scripts/  
-├── .github/workflows/  
-├── docker-compose.yml  
-├── README.md  
-└── informe-final.pdf  
-
----
-
-## 1. Diseño de Arquitectura
-
-El sistema está compuesto por:
-
-- **Coordinador (local o remoto)**: Recibe la imagen, la divide y gestiona la ejecución de tareas.
-- **Terraform**: Despliega dinámicamente nodos EC2 en la nube para realizar el procesamiento.
-- **Workers efímeros**: Ejecutan la tarea Sobel en contenedores Docker dentro de instancias creadas al momento.
-- **Almacenamiento temporal (opcional)**: Para compartir resultados si no hay comunicación directa con el coordinador.
-
-**Diagrama de arquitectura**:
-https://drive.google.com/file/d/1F6jdSoQEtzfKooSY1JW5VBDSKBiNWB0z/view?usp=sharing
-
-## 2. Provisionamiento Automático con Terraform
-
-Terraform se encarga de:
-
-- Crear instancias EC2 configuradas con:
-  - Docker
-  - Python
-  - Utilidades necesarias para correr el filtro Sobel
-- Ejecutar un `user_data` que:
-  - Instala dependencias automáticamente
-  - Descarga la imagen Docker del worker desde Docker Hub
-  - Ejecuta el contenedor con los parámetros adecuados
-  - Conecta el worker al cluster o sistema de mensajería
-
----
-
-## 3. Ejecución del Filtro Sobel
-
-1. El coordinador detecta la necesidad de procesar una imagen.
-2. Se activa Terraform para desplegar nuevos workers.
-3. Cada worker ejecuta su parte de la tarea en contenedor.
-4. Los resultados se consolidan en el coordinador.
-5. Las instancias EC2 se eliminan automáticamente al finalizar.
-
----
-
-## 4. Arquitectura Escalable Híbrida
-
-Esta arquitectura permite escalar horizontalmente de forma automática según la demanda. No se requieren nodos de procesamiento activos permanentemente, lo que representa un ahorro de recursos y mayor eficiencia.
-
-Se eligió una solución **híbrida** porque:
-- Permite mantener un coordinador fijo (local o remoto).
-- Crea infraestructura temporal en la nube para procesamiento intensivo.
-
----
-
-## 5. Consideraciones Técnicas
-
-- El filtro Sobel se encuentra empaquetado en una imagen Docker publicada en Docker Hub.
-- Las instancias EC2 son configuradas mediante `user_data` para su autoaprovisionamiento.
-- El sistema puede ampliarse para utilizar colas de trabajo (RabbitMQ) o almacenamiento compartido si se desea mayor desacoplamiento.
-
----
-
-## 6. Resultados
-
-- El sistema fue probado con múltiples imágenes, generando instancias bajo demanda que ejecutan la tarea correctamente.
-- Se verificó la elasticidad: los nodos se crean sólo cuando hay tarea, y se destruyen automáticamente luego.
-- La solución demostró ser eficiente, reproducible y escalable.
-
----
+El funcionamiento del programa se modificará lo menos posible a fin de posibilitar que los siguientes hits operen de la misma forma, en caso de que se realice algun cambio se detallará lo realizado y el nuevo funcionamiento.
