@@ -1,12 +1,28 @@
+from flask import Flask, request, jsonify, render_template_string, send_file
 import cv2
 import numpy as np
-import sys
-import os
-import time
-import pika
 import base64
 import json
+import time
+import pika
 import redis
+
+app = Flask(__name__)
+
+HTML_FORM = """
+<!doctype html>
+<html>
+  <head><title>Filtro Sobel</title></head>
+  <body>
+    <h1>Subir imagen para aplicar filtro</h1>
+    <form method="POST" enctype="multipart/form-data">
+      Imagen: <input type="file" name="imagen" accept="image/*" required><br>
+      Nro de Workers: <input type="number" name="nro_workers" min="1" required><br>
+      <input type="submit" value="Procesar Imagen">
+    </form>
+  </body>
+</html>
+"""
 
 def dividir_imagen(imagen, n):
     alto = imagen.shape[0]
@@ -55,7 +71,7 @@ def enviar_tareas(partes):
         )
     connection.close()
 
-def esperar_resultados_redis(n, reintentos=3, espera_reintento=5):
+def esperar_resultados_redis(n, reintentos=3, espera_reintento=2):
     """
     Espera los resultados de los workers, maneja fallos y reintentos.
     Si un worker falla, redistribuye la tarea a otro worker disponible.
@@ -88,7 +104,9 @@ def esperar_resultados_redis(n, reintentos=3, espera_reintento=5):
                     # Reducción de reintentos
                     reintentos -= 1
                 else:
+                    # Si no se han completado después de los intentos, redistribuir la tarea a otro worker.
                     print(f"Tarea {i} falló después de varios intentos, redistribuyendo...")
+                    # Aquí puede implementarse la lógica para redistribuir la tarea a otro worker.
                     tareas_en_proceso.add(i)  # Volver a poner la tarea en la cola para que otro worker la procese
                     reintentos = 3  # Restablecer reintentos para las nuevas tareas
 
@@ -97,24 +115,40 @@ def esperar_resultados_redis(n, reintentos=3, espera_reintento=5):
 
     return partes_procesadas
 
-def main():
-    if len(sys.argv) != 4:
-        print("Uso: python coordinador.py <input> <output> <nro workers>")
-        return
+@app.route("/", methods=["GET", "POST"])
+def index():
+    if request.method == "GET":
+        return render_template_string(HTML_FORM)
 
-    input_path = sys.argv[1]
-    output_path = sys.argv[2]
-    n = int(sys.argv[3])
+    # POST: procesar imagen
+    if "imagen" not in request.files or "nro_workers" not in request.form:
+        return "Faltan parámetros.", 400
 
-    img = cv2.imread(input_path, cv2.IMREAD_GRAYSCALE)
-    partes = dividir_imagen(img, n)
-    enviar_tareas(partes)
-    print("Tareas enviadas. Esperando resultados...")
+    try:
+        n = int(request.form["nro_workers"])
+        file = request.files["imagen"]
+        if file.filename == "":
+            return "No se seleccionó archivo.", 400
 
-    partes_filtradas = esperar_resultados_redis(n)
-    resultado = unir_imagenes(partes_filtradas)
-    cv2.imwrite(output_path, resultado)
-    print(f"Imagen final guardada como {output_path}")
+        file_bytes = file.read()
+        img = cv2.imdecode(np.frombuffer(file_bytes, np.uint8), cv2.IMREAD_GRAYSCALE)
+
+        partes = dividir_imagen(img, n)
+        enviar_tareas(partes)
+
+        print("Tareas enviadas. Esperando resultados...")
+        partes_filtradas = esperar_resultados_redis(n)
+        resultado = unir_imagenes(partes_filtradas)
+
+        # Guardar imagen temporalmente
+        filename = "/tmp/resultado.jpg"
+        cv2.imwrite(filename, resultado)
+
+        # Enviar como descarga
+        return send_file(filename, as_attachment=True, download_name="resultado.jpg", mimetype="image/jpeg")
+    
+    except Exception as e:
+        return f"Error interno: {str(e)}", 500
 
 if __name__ == "__main__":
-    main()
+    app.run(host="0.0.0.0", port=80)

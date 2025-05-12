@@ -1,5 +1,10 @@
 # Trabajo Práctico N.º 3 - Computación en la Nube (Kubernetes / RabbitMQ)
 
+## Nota Importante
+
+Es muy posible que este hit no funcione a la hora de intentar levantarlo, esto se debe a que las imagenes de docker utilizadas estan subidas a docker hub, y automaticamente descarga la version :latest, por lo que a futuro, si la forma de operar estas se modifica, el funcionamiento de este despliegue cloud se vera comprometido.
+En caso que no funcione el despliegue, el programa puede ejecutarse de la misma manera que el hit anterior (docker compose).
+
 ## Objetivo General
 
 Diseñar e implementar una solución distribuida basada en contenedores que permita ejecutar tareas genéricas de forma remota. En este caso, la tarea implementada consiste en aplicar un **filtro Sobel** a una imagen de entrada, dividiendo el trabajo entre varios contenedores y utilizando RabbitMQ para coordinar el procesamiento paralelo. Se utilizaron tecnologías como Docker, Python, RabbitMQ, y Docker Compose.
@@ -8,6 +13,12 @@ Diseñar e implementar una solución distribuida basada en contenedores que perm
 
 ```
 TP3/
+├── k8s/
+│   ├── deployment-coordinador.yaml
+│   ├── deployment-worker.yaml
+│   ├── deployment-rabbitmq.yaml
+│   ├── deployment-redis.yaml
+│   ├── deployment-coordinador.yaml
 ├── sobel-app/
 │   ├── sobel.py
 │   ├── Dockerfile
@@ -19,13 +30,15 @@ TP3/
 │   ├── images/
 │   ├── rabbitmq.conf
 │   ├── docker-compose.yml
-├── informe-final.pdf
+├── terraform/
+│   ├── main.tf
+│   ├── variables.tf
 ├── README.md
 ```
 
 ## 1. Diseño de Arquitectura
 
-La arquitectura está compuesta por tres componentes principales:
+La arquitectura está compuesta por cuatro componentes principales:
 
 * **Coordinador**: recibe una imagen de entrada, la divide en partes y las envía a los workers por medio de una cola de RabbitMQ llamada "tareas" en formato Base64 para que pueda ser interpretada como texto, junto a la imagen se envia un respectivo Chunk ID, para poder identificarlo a la hora de reconstruir la imagen.
 * **Workers**: cada uno se suscribe a la cola "tareas" de RabbitMQ, donde recibe una porción de imagen, la decodifica, aplica el filtro Sobel y publica el resultado en una base de datos Redis, identificandola con el ID del Chunk (Tambien codificado en base 64).
@@ -34,10 +47,16 @@ La arquitectura está compuesta por tres componentes principales:
 
 Los componentes están contenerizados y orquestados mediante `docker-compose`. El paso de parámetros y resultados se realiza vía colas de RabbitMQ y bases de datos Redis.
 
+Para este Hit se agrega el offloading en gcp, el cual, para llevarse a cabo requiere de Terraform y Kubernetes.
+
+* Se implementó un cluster en la plataforma cloud de Google (GCP) por medio de Terraform, definiendo el cluster primario donde se cargarán los pods que desarrollan las diferentes tareas (Archivo terraform/main.tf).
+
+* Con el cluster ya creado, se obtienen las credenciales de kubernetes y se realiza el despliegue de todos los servicios mencionados anteriormente (archivos .yaml en k8s/). 
+
 ## 2. Implementación del Servidor (Coordinador)
 
 * Lenguaje: Python 3
-* Ejecuta el archivo `coordinador.py`.
+* Ejecuta el archivo `coordinador.py`, el cual levanta una web simple, donde se debe cargar la imagen a la cual aplicar el filtro.
 * Recibe una imagen, la divide en partes y las coloca en una cola de RabbitMQ.
 * Espera los resultados procesados por los workers leyendo la base de datos Redis hasta encontrar todas las partes de la imagen, momento en que reconstruye la imagen final.
 
@@ -56,27 +75,47 @@ git clone <repo-url>
 cd tp2-sistemas-distribuidos/sobel-distribuido
 ```
 
-2. En este punto, si se quisiera cambiar la imagen a la que se le aplica el filtro de sobel, se debe modificar el archivo docker-compose.yml, en la linea 23:
-```bash
-command: ["images/logos.jpg", "images/output/salidaLogos.jpg", "${NUM_WORKERS}"]  # imagen, salida, cantidad de workers
-```
-Donde el primer parametro es la ruta a la imagen a la que se le aplica el filtro, el segundo la ruta de salida donde se guarda la imagen resultado, y el tercero el numero de workers en los que se ditribuye la imagen, este parametro se guarda y modifica en el archivo .env.
+2. Para ejecutar este hit se debe cumplir una serie de pre-requisitos:
+  - Instalar Terraform
+  - Obtener el archivo .json que contiene las claves de la cuenta de servicio creada para terraform dentro del proyecto en gcp (La cuenta tiene por nombre terraform-sa).
 
-3. Ejecutar con Docker Compose
+3. En el directorio terraform/, ejecutar:
 
 ```bash
-docker-compose up --build
+terraform init
+terraform apply
 ```
+Para crear la estructura y recursos necesarios (Cluster y nodepool)
 
-4. La imagen procesada estará en la ruta indicada como segundo parametro en el docker-compose.
+4. Con esto creado, ejecutar en el mismo directorio el comando:
 
+```bash
+gcloud container clusters get-credentials simple-gke-cluster --region us-central1-a --project the-program-457617-r1
+```
+Para obtener las credenciales de kubernetes del cluster, con esto hecho, ya se puede iniciar el despliegue de los servicios ubicados en k8s/, para ello, volver un directorio (hasta TP3/) y ejecutar:
 
-Nota: El repositorio ya viene con algunas imagenes de prueba.
+```bash
+kubectl apply -f k8s/
+```
+Esto creará los servicios necesarios.
 
-## 6. Video Explicativo
+5. Por ultimo, se debe obtener la direccion ip asignada por google al servicio del coordinador, esto puede hacerse con el comando:
+
+```bash
+kubectl get services
+```
+Con esta ip, se puede acceder por medio del buscador a la web del coordinador, donde se cargara la imagen a la que se desea aplicar sobel.
+
+6. La imagen procesada se descargará automaticamente una vez finalizado el proceso.
+
+## 5. Video Explicativo
 
 Creamos un video explicativo del funcionamiento general del programa con una demostracion del resultado final del procesamiento de una imagen.
 
 https://drive.google.com/file/d/1pdLQDNIgUK5oxtYfljEDU0AEpukmDo6I/view?usp=sharing
 
 El funcionamiento del programa se modificará lo menos posible a fin de posibilitar que los siguientes hits operen de la misma forma, en caso de que se realice algun cambio se detallará lo realizado y el nuevo funcionamiento.
+
+## Modificaciones al funcionamiento:
+
+- Ahora el coordinador no recibe como parametros la imagen, salida y workers a utilizar, sino que levanta un servicio web muy simple, donde se puede cargar la imagen e indicar la cantidad de workers, esta web opera en el puerto 80, en la direccion ip asignada por gcp, el resto del funcionamiento se mantiene igual.

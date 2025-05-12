@@ -8,7 +8,6 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: guest
       RABBITMQ_DEFAULT_PASS: guest
-      RABBITMQ_DEFAULT_VHOST: "/"
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
       - ./rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf
@@ -20,14 +19,16 @@ services:
 
   coordinador:
     build: ./coordinador
-    command: ["images/logos.jpg", "images/output/salidaLogos.jpg", "${NUM_WORKERS}"]  # imagen, salida, cantidad de workers
+    ports:
+      - "80:80"
     volumes:
-      - ./images:/app/images               # acceso a las imágenes
+      - ./images:/app/images  # si querés guardar imágenes subidas o temporales
     depends_on:
       - rabbitmq
       - redis
     environment:
-      NUM_WORKERS: ${NUM_WORKERS}
+      - FLASK_ENV=development
+      - NUM_WORKERS=${NUM_WORKERS}
 
   worker:
     build: ./worker
@@ -37,7 +38,7 @@ services:
       - rabbitmq
       - redis
     volumes:
-      - ./images:/app/images
+      - ./images:/app/images  # si se necesita acceso a imágenes también
 
 volumes:
   rabbitmq_data:
