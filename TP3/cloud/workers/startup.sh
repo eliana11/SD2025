@@ -25,7 +25,7 @@ systemctl start docker
 # Ejecutar contenedor del worker
 docker run -d \
   --name worker \
-  -e REDIS_HOST=35.192.149.157 \
-  -e RABBITMQ_HOST=34.59.0.23 \
+  -e REDIS_HOST=34.56.128.142 \
+  -e RABBITMQ_HOST=35.238.6.47 \
   --restart always \
   bautista222221/worker:latest
