@@ -41,9 +41,10 @@ def conectar_rabbitmq(reintentos=5, espera=10):
     for i in range(reintentos):
         try:
             connection = pika.BlockingConnection(pika.ConnectionParameters(
-                host='rabbitmq',
+                host='rabbitmq-service',
                 port=5672,
-                credentials=pika.PlainCredentials("guest", "guest")))
+                credentials=pika.PlainCredentials("guest", "guest")
+            ))
             print("Conectado a RabbitMQ")
             return connection
         except pika.exceptions.AMQPConnectionError:
@@ -81,7 +82,7 @@ def esperar_resultados_redis(n, reintentos=3, espera_reintento=2):
     :param espera_reintento: Tiempo de espera antes de reintentar.
     :return: Lista de partes procesadas de la imagen.
     """
-    r = redis.Redis(host='redis', port=6379)
+    r = redis.Redis(host='redis-service', port=6379)
     partes_procesadas = []
     tareas_en_proceso = set(range(n))  # Mantener un registro de qué tareas están en proceso
 
