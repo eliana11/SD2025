@@ -1,31 +1,45 @@
-# SD2025
-Desarrollo de los TP de Sistemas Distribuidos
+# Sistemas Distribuidos y Programación Paralela - Trabajos Prácticos
 
-Trabajo Práctico Nº 2
+Este repositorio contiene el desarrollo de los **trabajos prácticos** correspondientes a la materia **Sistemas Distribuidos y Programación Paralela**, cursada en [Nombre de la institución o facultad si querés agregarlo].
 
-*Objetivo General*
+## 🧑‍💻 Integrantes
 
-Diseñar e implementar una solución distribuida basada en contenedores que permita ejecutar tareas genéricas de forma remota, utilizando tecnologías como HTTP, Docker, CI/CD y despliegue en la nube.
+| Nombre Completo          | Legajo | Mail                 |
+|--------------------------|--------|----------------------|
+| Bautista Pereyra Buch    | 193177 | bautistapereyrabuch@gmail.com        |
+| Eliana Cardona           | 118441 | elianacardona12@gmail.com        |
 
-Estructura del Repositorio
+## 📁 Estructura del repositorio
 
-/SD2025/
-├── TP1
-├── TP2
-  ├── cliente/src
-      └── Cliente.py
-  ├── servidor/
-      ├── bin/src
-            ├── ListaTareasHandler.class
-            ├── Servidor.class
-            └── TaskHandler.class
-      ├──lib
-            └──json-20250107.jar
-      ├── src
-            └──Servidor.java
-      └── Dockerfile
-  ├──lib
-        └── json-20250107.jar
-  └── README.md
-├── docker-compose.yml
+Cada trabajo práctico se encuentra organizado en su propio directorio. Dentro de cada uno podrás encontrar:
+
+- Código fuente de los servicios involucrados.
+- Configuraciones de despliegue.
+- Documentación y consideraciones de la implementación.
+- Instrucciones de ejecución.
+
+├── TP1/
+├── TP2/
+├── TP3/
 └── README.md
+
+
+
+> ⚠️ El archivo `README.md` dentro de cada directorio tiene instrucciones específicas del respectivo trabajo.
+
+## ⚙️ Tecnologías utilizadas
+
+- Java
+- Maven
+- Python
+- Docker
+- Kubernetes (GKE)
+- Terraform
+- Redis / RabbitMQ
+- Google Cloud Platform (GCP)
+
+## Nota
+
+Este repositorio es de uso académico y con fines educativos.
+
+
