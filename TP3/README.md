@@ -81,36 +81,13 @@ cd tp2-sistemas-distribuidos/sobel-distribuido
 
 2. Para ejecutar este hit se debe cumplir una serie de pre-requisitos:
   - Instalar Terraform
-  - Obtener el archivo .json que contiene las claves de la cuenta de servicio creada para terraform dentro del proyecto en gcp (La cuenta tiene por nombre terraform-sa).
+  - Obtener el archivo .json que contiene las claves de la cuenta de servicio creada para terraform dentro del proyecto en gcp (La cuenta tiene por nombre terraform-sa) y copiarla en los directorios firewalls/, gke/ y workers/.
 
-3. En el directorio terraform/, ejecutar:
+3. El paso a paso para realizar la implementacion y despliegue se encuentra en el directorio pipelines/, donde, de forma enumerada, se dan los comandos utilizados para realizar la ejecucion del proyecto.
 
-```bash
-terraform init
-terraform apply
-```
-Para crear la estructura y recursos necesarios (Cluster y nodepool)
+4. Ingresar a la pagina web del coordinador, subir la imagen e indicar la cantidad de workers a usar (no mas de 3, ya que solo hay 3 maquinas virtuales creadas)
 
-4. Con esto creado, ejecutar en el mismo directorio el comando:
-
-```bash
-gcloud container clusters get-credentials simple-gke-cluster --region us-central1-a --project the-program-457617-r1
-```
-Para obtener las credenciales de kubernetes del cluster, con esto hecho, ya se puede iniciar el despliegue de los servicios ubicados en k8s/, para ello, volver un directorio (hasta TP3/) y ejecutar:
-
-```bash
-kubectl apply -f k8s/
-```
-Esto creará los servicios necesarios.
-
-5. Por ultimo, se debe obtener la direccion ip asignada por google al servicio del coordinador, esto puede hacerse con el comando:
-
-```bash
-kubectl get services
-```
-Con esta ip, se puede acceder por medio del buscador a la web del coordinador, donde se cargara la imagen a la que se desea aplicar sobel.
-
-6. La imagen procesada se descargará automaticamente una vez finalizado el proceso.
+5. La imagen procesada se descargará automaticamente una vez finalizado el proceso.
 
 ## 5. Flujo de Ejecución
 
@@ -134,6 +111,8 @@ Con esta ip, se puede acceder por medio del buscador a la web del coordinador, d
 
 El despliegue está compuesto por:
 
+    Maquinas Virtuales que utilizan la imagen de workers, para aplicar el filtro de sobel.
+
     Un clúster GKE en GCP, creado con Terraform.
 
     Pods de Kubernetes definidos mediante archivos YAML.
@@ -142,14 +121,11 @@ El despliegue está compuesto por:
 
         deployment-coordinador.yaml despliega el Coordinador.
 
-        worker-deployment.yaml despliega los Workers.
-
         Servicios para Redis y RabbitMQ incluidos en infra-k8s/.
-
 
 ## 7. Escalabilidad
 
-El sistema está diseñado para escalar horizontalmente agregando más pods de Worker. Esto permite que se distribuyan más tareas concurrentemente, mejorando el rendimiento para imágenes de mayor tamaño.
+El sistema está diseñado para escalar horizontalmente agregando más pods de Worker. Esto permite que se distribuyan más tareas concurrentemente, mejorando el rendimiento para imágenes de mayor tamaño, para ello se debe incrementar la cantidad de VMs creadas.
 
 El Coordinador también puede configurarse como un deployment replicable para mejorar tolerancia a fallos.
 
@@ -173,36 +149,15 @@ Para facilitar un despliegue reproducible y automatizado de la infraestructura y
 - Despliegue de servicios esenciales mediante archivos YAML:
   - **Redis**: almacenamiento temporal de resultados.
   - **RabbitMQ**: sistema de colas para orquestación.
-
-### Pipeline 1.2: Aplicaciones del Sistema
-- Despliegue de contenedores para:
   - **Coordinador**: recibe imagen, la divide, envía tareas a RabbitMQ y reconstruye el resultado desde Redis.
-  - **Workers**: aplican el filtro Sobel sobre fragmentos de imagen.
 
-## Análisis de Desempeño Bajo Carga
-
-Este análisis evalúa el comportamiento de la plataforma desarrollada en HIT3 al someterla a distintas combinaciones de carga
-
-Variable	Descripción
-V1 - Tamaño de los datos	Imágenes de 1 KB, 10 KB, 1 MB, 10 MB y 100 MB
-V2 - Peticiones concurrentes	1, 5, 10, 25, 50 solicitudes simultáneas
-V3 - Cantidad de workers	1, 2, 5, 10 VMs procesando
-
-Resultados
-
-| Tamaño Imagen (V1) | Concurrencia (V2) | Workers (V3) | Tiempo Promedio (ms) | Tiempo Máx (ms) |
-|--------------------|-------------------|--------------|-----------------------|-----------------|
-| 1 KB               | 1                 | 1            | 120                   | 130             |
-| 10 KB              | 10                | 2            | 860                   | 1170            |
-| 1 MB               | 10                | 3            | 800                   | 900             |
-| 10 MB              | 10                | 1            | 4000                  | 5500            |
-| 100 MB             | 5                 | 2            | 7000                  | 8500            |
+### Pipeline 1.2: Reglas de Firewall
+- Despliegue de regla de firewall para permitir la comunicacion entre nodos internos y externos al cluster.
+  
 
 
 Conclusiones
 
-    La plataforma responde de forma escalable al aumentar la cantidad de workers.
+  - La plataforma responde de forma escalable al aumentar la cantidad de workers.
 
-    La carga del sistema se distribuye adecuadamente gracias al uso de Redis y RabbitMQ.
-
-    El tamaño de los datos tiene impacto lineal en la latencia, pero el sistema soporta cargas altas sin caídas.
+  - La carga del sistema se distribuye adecuadamente gracias al uso de Redis y RabbitMQ.
