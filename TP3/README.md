@@ -146,12 +146,15 @@ V2 - Peticiones concurrentes	1, 5, 10, 25, 50 solicitudes simultáneas
 V3 - Cantidad de workers	1, 2, 5, 10 VMs procesando
 
 Resultados
-Tamaño Imagen (V1)	Concurrencia (V2)	Workers (V3)	Tiempo Promedio (ms)	Tiempo Máx (ms)
-1 KB	1	1	120	130
-10 KB 10 2 860 1170
-1 MB	10	3	800	900
-10 MB	10	1	4000	5500
-100 MB	5	2	7000	8500
+
+| Tamaño Imagen (V1) | Concurrencia (V2) | Workers (V3) | Tiempo Promedio (ms) | Tiempo Máx (ms) |
+|--------------------|-------------------|--------------|-----------------------|-----------------|
+| 1 KB               | 1                 | 1            | 120                   | 130             |
+| 10 KB              | 10                | 2            | 860                   | 1170            |
+| 1 MB               | 10                | 3            | 800                   | 900             |
+| 10 MB              | 10                | 1            | 4000                  | 5500            |
+| 100 MB             | 5                 | 2            | 7000                  | 8500            |
+
 
 Conclusiones
 
