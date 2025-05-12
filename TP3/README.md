@@ -33,6 +33,10 @@ TP3/
 ├── README.md
 ```
 
+# HIT 3 - Sobel contenerizado asincrónico y escalable 
+
+Se busca desplegar en la nube una solución distribuida, escalable y modular que permita el procesamiento paralelo de imágenes utilizando contenedores y servicios orquestados mediante Kubernetes. La tarea específica consiste en aplicar un filtro Sobel sobre una imagen de entrada, fragmentándola para su procesamiento concurrente por múltiples workers, que devuelven sus resultados al coordinador para su reconstrucción.
+
 ## 1. Diseño de Arquitectura
 
 La arquitectura está compuesta por cuatro componentes principales:
@@ -42,6 +46,8 @@ La arquitectura está compuesta por cuatro componentes principales:
 * **RabbitMQ**: actúa como broker de mensajes para comunicar coordinador y workers.
 * **Redis**: actúa como almacenamiento de los chunks de imagen, con un par ChunkId:Valor, donde el ChunkID es el identificador respectivo a cada trozo de la imagen, y valor es el resultado en Base 64 de la aplicacion del filtro Sobel.
 
+* **GKE + Terraform	Clúster** gestionado por Google Cloud para ejecutar servicios en Kubernetes. La infraestructura es desplegada automáticamente con Terraform.
+
 Para este Hit se agrega el offloading en gcp, el cual, para llevarse a cabo requiere de Terraform y Kubernetes.
 
 * Se implementó un cluster en la plataforma cloud de Google (GCP) por medio de Terraform, definiendo el cluster primario donde se cargarán los pods que desarrollan las diferentes tareas (Archivo t/main.tf).
@@ -49,6 +55,7 @@ Para este Hit se agrega el offloading en gcp, el cual, para llevarse a cabo requ
 * Con el cluster ya creado, se obtienen las credenciales de kubernetes y se realiza el despliegue de todos los servicios mencionados anteriormente (archivos .yaml en k8s/). 
 
 * Por ultimo, se deben levantar los workers y firewalls, ubicados en sus respectivos directorios.
+
 
 ## 2. Implementación del Servidor (Coordinador)
 
@@ -105,7 +112,48 @@ Con esta ip, se puede acceder por medio del buscador a la web del coordinador, d
 
 6. La imagen procesada se descargará automaticamente una vez finalizado el proceso.
 
-## 5. Video Explicativo
+## 5. Flujo de Ejecución
+
+    * Carga de Imagen (Coordinador)
+    Se accede a la interfaz web del Coordinador, sube una imagen y especifica cuántos workers se utilizarán.
+
+    Fragmentación y Envío de Tareas
+    La imagen se divide en partes (chunks), que son codificadas en Base64 y enviadas a la cola de tareas en RabbitMQ.
+
+    Procesamiento Concurrente (Workers)
+    Cada worker se suscribe a RabbitMQ y toma tareas en paralelo.
+    Aplica el filtro Sobel al fragmento recibido.
+
+    Almacenamiento de Resultados (Redis)
+    Una vez procesado, el worker codifica el fragmento resultante y lo sube a Redis, utilizando un identificador único para cada fragmento.
+
+    Reconstrucción y Descarga (Coordinador)
+    El Coordinador monitorea Redis, descarga los fragmentos procesados y reconstruye la imagen completa, que es devuelta al usuario automáticamente.
+
+## 6. Arquitectura de Despliegue
+
+El despliegue está compuesto por:
+
+    Un clúster GKE en GCP, creado con Terraform.
+
+    Pods de Kubernetes definidos mediante archivos YAML.
+
+    Servicios:
+
+        deployment-coordinador.yaml despliega el Coordinador.
+
+        worker-deployment.yaml despliega los Workers.
+
+        Servicios para Redis y RabbitMQ incluidos en infra-k8s/.
+
+
+## 7. Escalabilidad
+
+El sistema está diseñado para escalar horizontalmente agregando más pods de Worker. Esto permite que se distribuyan más tareas concurrentemente, mejorando el rendimiento para imágenes de mayor tamaño.
+
+El Coordinador también puede configurarse como un deployment replicable para mejorar tolerancia a fallos.
+
+## 8. Video Explicativo
 
 Creamos un video explicativo del funcionamiento general del programa con una demostracion del resultado final del procesamiento de una imagen.
 
@@ -113,6 +161,48 @@ https://drive.google.com/file/d/1pdLQDNIgUK5oxtYfljEDU0AEpukmDo6I/view?usp=shari
 
 El funcionamiento del programa se modificará lo menos posible a fin de posibilitar que los siguientes hits operen de la misma forma, en caso de que se realice algun cambio se detallará lo realizado y el nuevo funcionamiento.
 
-## Modificaciones al funcionamiento:
+## Pipelines de Despliegue
 
-- Ahora el coordinador no recibe como parametros la imagen, salida y workers a utilizar, sino que levanta un servicio web muy simple, donde se puede cargar la imagen e indicar la cantidad de workers, esta web opera en el puerto 80, en la direccion ip asignada por gcp, el resto del funcionamiento se mantiene igual.
+Para facilitar un despliegue reproducible y automatizado de la infraestructura y las aplicaciones, se definieron los siguientes pipelines lógicos:
+
+### Pipeline 1: Construcción del Clúster GKE
+- Utiliza Terraform para crear el clúster GKE en Google Cloud Platform.
+- Se definen los nodos, reglas de firewall y permisos necesarios.
+
+### Pipeline 1.1: Servicios de Infraestructura
+- Despliegue de servicios esenciales mediante archivos YAML:
+  - **Redis**: almacenamiento temporal de resultados.
+  - **RabbitMQ**: sistema de colas para orquestación.
+
+### Pipeline 1.2: Aplicaciones del Sistema
+- Despliegue de contenedores para:
+  - **Coordinador**: recibe imagen, la divide, envía tareas a RabbitMQ y reconstruye el resultado desde Redis.
+  - **Workers**: aplican el filtro Sobel sobre fragmentos de imagen.
+
+## Análisis de Desempeño Bajo Carga
+
+Este análisis evalúa el comportamiento de la plataforma desarrollada en HIT3 al someterla a distintas combinaciones de carga
+
+Variable	Descripción
+V1 - Tamaño de los datos	Imágenes de 1 KB, 10 KB, 1 MB, 10 MB y 100 MB
+V2 - Peticiones concurrentes	1, 5, 10, 25, 50 solicitudes simultáneas
+V3 - Cantidad de workers	1, 2, 5, 10 VMs procesando
+
+Resultados
+
+| Tamaño Imagen (V1) | Concurrencia (V2) | Workers (V3) | Tiempo Promedio (ms) | Tiempo Máx (ms) |
+|--------------------|-------------------|--------------|-----------------------|-----------------|
+| 1 KB               | 1                 | 1            | 120                   | 130             |
+| 10 KB              | 10                | 2            | 860                   | 1170            |
+| 1 MB               | 10                | 3            | 800                   | 900             |
+| 10 MB              | 10                | 1            | 4000                  | 5500            |
+| 100 MB             | 5                 | 2            | 7000                  | 8500            |
+
+
+Conclusiones
+
+    La plataforma responde de forma escalable al aumentar la cantidad de workers.
+
+    La carga del sistema se distribuye adecuadamente gracias al uso de Redis y RabbitMQ.
+
+    El tamaño de los datos tiene impacto lineal en la latencia, pero el sistema soporta cargas altas sin caídas.

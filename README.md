@@ -1,6 +1,6 @@
 # Sistemas Distribuidos y Programación Paralela - Trabajos Prácticos
 
-Este repositorio contiene el desarrollo de los **trabajos prácticos** correspondientes a la materia **Sistemas Distribuidos y Programación Paralela**, cursada en [Nombre de la institución o facultad si querés agregarlo].
+Este repositorio contiene el desarrollo de los **trabajos prácticos** correspondientes a la materia **Sistemas Distribuidos y Programación Paralela**
 
 ## 🧑‍💻 Integrantes
 
