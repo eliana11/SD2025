@@ -1,0 +1,16 @@
+[
+    {
+        "index": 0,
+        "timestamp": "2025-06-19 03:56:40",
+        "transacciones": [
+            {
+                "de": "CoinBase",
+                "para": "Bautista",
+                "monto": 50
+            }
+        ],
+        "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "nonce": 0,
+        "hash": "8f39b964c93e92df3a7849ce33655f0c30ecdb489b51788853e124d082c2cdee"
+    }
+]
