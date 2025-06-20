@@ -6,15 +6,8 @@ import json       # Para manejar datos JSON
 
 COORDINADOR_URL = "http://coordinador:5000"
 
-TIPO_MINERO = os.getenv("TIPO_MINERO", "cpu") 
+MINERO_EJECUTABLE = "./MineroMD5" 
 
-if TIPO_MINERO == "cpu":
-    MINERO_EJECUTABLE = "./HashMD5CPU" 
-elif TIPO_MINERO == "gpu":
-    MINERO_EJECUTABLE = "./HashFuerzaBrutaconLimites" 
-else:
-    print(f"[WORKER] Advertencia: Tipo de minero desconocido '{TIPO_MINERO}'. Usando el de CPU por defecto.")
-    MINERO_EJECUTABLE = "./HashMD5CPU" 
 
 def obtener_tarea():
     try:
@@ -27,20 +20,32 @@ def obtener_tarea():
         print("Error al obtener tarea:", e)
         return None
     
-def enviar_resultado_al_coordinador(resultado_minado):
+def enviar_resultado_al_coordinador(tarea_original, resultado_minado): 
     try:
-        resp = requests.post(f"{COORDINADOR_URL}/solucion", json=resultado_minado)
+        if resultado_minado.get("status") == "solution_found":
+            bloque_final = {
+                "index": tarea_original.get("index"),
+                "transacciones": tarea_original.get("transacciones"),
+                "prev_hash": tarea_original.get("prev_hash"),
+                "timestamp": tarea_original.get("timestamp"), # Usamos el timestamp de la tarea original
+                "nonce": resultado_minado.get("nonce_found"), # El nonce encontrado por el minero
+                "hash": resultado_minado.get("block_hash_result") # El hash resultante del bloque
+            }
+        else:
+            print(f"[WORKER] No se envía bloque al Coordinador porque el minero no encontró una solución o hubo un error: {resultado_minado.get('status')}")
+            return False
+        resp = requests.post(f"{COORDINADOR_URL}/resultado", json=bloque_final)
         resp.raise_for_status() # Lanza una excepción si la respuesta no es 2xx
-        print(f"[WORKER] Resultado enviado al Coordinador. Respuesta: {resp.json()}")
+        print(f"[WORKER] Bloque minado enviado al Coordinador. Respuesta: {resp.json()}")
         return True
     except requests.exceptions.RequestException as e:
-        print(f"[WORKER] Error al enviar resultado al Coordinador: {e}")
+        print(f"[WORKER] Error al enviar resultado (bloque) al Coordinador: {e}")
         # Si la respuesta del Coordinador es un error, muestra el contenido para depuración
         if hasattr(e, 'response') and e.response is not None:
             print(f"[WORKER] Respuesta del Coordinador (ERROR): {e.response.text}")
         return False
     except Exception as e:
-        print(f"[WORKER] Error inesperado al enviar resultado: {e}")
+        print(f"[WORKER] Error inesperado al enviar resultado (bloque): {e}")
         return False
     
 def ejecutar_minero_cuda(tarea):  
@@ -59,7 +64,8 @@ def ejecutar_minero_cuda(tarea):
             comando, 
             capture_output=True, 
             text=True, 
-            check=True 
+            check=True,
+            timeout=300 
         )
         
         salida_minero = resultado_proceso.stdout.strip()
@@ -97,33 +103,31 @@ def bucle_principal_worker():
     while True:
         tarea = obtener_tarea()
         if tarea:
-            print(f"[WORKER] Tarea recibida (PrevHash: {tarea.get('prev_hash', 'N/A')[:8]}..., Dificultad: {tarea.get('dificultad', 'N/A')}).")
+            if not all(k in tarea for k in ["prev_hash", "transacciones", "dificultad", "start_nonce", "end_nonce"]):
+                print(f"[WORKER] Tarea recibida incompleta o con formato inesperado. Saltando. Tarea: {tarea}")
+                time.sleep(1)
+                continue
 
-            # Ejecutamos el minero C++/CUDA con la tarea recibida
+            print(f"[WORKER] Tarea recibida (Index: {tarea.get('index')}, PrevHash: {tarea.get('prev_hash', 'N/A')[:8]}..., Dificultad: {tarea.get('dificultad', 'N/A')}).")
+
             resultado_minero = ejecutar_minero_cuda(tarea)
             
             if resultado_minero:
-                # Ahora usamos el campo 'status' del resultado del minero
                 if resultado_minero.get("status") == "solution_found":
                     print(f"[WORKER] ¡SOLUCIÓN ENCONTRADA! Nonce: {resultado_minero.get('nonce_found')}, Hash: {resultado_minero.get('block_hash_result')[:8]}...")
-                    enviar_resultado_al_coordinador(resultado_minero) # <--- ¡NUEVO! Enviar la solución
+                    enviar_resultado_al_coordinador(tarea, resultado_minero) 
                 elif resultado_minero.get("status") == "no_solution_found":
                     print("[WORKER] Minero finalizó rango sin encontrar solución.")
-                    # Opcional: También podrías enviar esto al coordinador si quieres que registre el intento fallido
-                    # enviar_resultado_al_coordinador(resultado_minero) 
                 else:
-                    print(f"[WORKER] Minero retornó estado desconocido o error: {resultado_minero.get('status')}")
-                    # En este caso, el 'resultado_minero' ya contiene los detalles del error
-                    enviar_resultado_al_coordinador(resultado_minero) # Reportar el error al Coordinador
-
+                    print(f"[WORKER] Minero retornó estado desconocido o error: {resultado_minero.get('status')}. Detalles: {resultado_minero.get('details', 'N/A')}")
             else:
                 print("[WORKER] Fallo al obtener un resultado válido del minero.")
             
-            # Pausa para evitar sobrecargar la CPU/Coordinador en un bucle apretado.
             time.sleep(1) 
         else:
             print("[WORKER] Sin tareas disponibles del Coordinador. Esperando...")
-            time.sleep(5) # Pausa más larga cuando no hay tareas disponibles
+            time.sleep(5) 
 
 if __name__ == "__main__":
     bucle_principal_worker()
+
