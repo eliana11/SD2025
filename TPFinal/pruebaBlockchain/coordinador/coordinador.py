@@ -7,23 +7,31 @@ import time
 import hashlib
 import os
 import redis
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.exceptions import InvalidSignature
+import base64
 
 app = Flask(__name__)
 transacciones_pendientes = []
 
+print("[INIT] Conectando a RabbitMQ...")
 rabbit_connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost'))
 channel = rabbit_connection.channel()
 channel.queue_declare(queue='mining_tasks')
+print("[OK] Conectado a RabbitMQ y cola declarada.")
 
-
+print("[INIT] Conectando a Redis...")
 redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+print("[OK] Conectado a Redis.")
 
 @app.route('/registro', methods=['POST'])
 def registrar_usuario():
     datos = request.get_json()
     if 'clave_publica' not in datos:
+        print("[❌] Registro fallido: falta clave_publica")
         return jsonify({"error": "Falta clave_publica"}), 400
-    redis_client.set(f"usuario:{datos['clave_publica']}", json.dumps(datos))
+    print("[📝] Registro de usuario:", datos["clave_publica"])
     return jsonify({"mensaje": "Usuario registrado"}), 201
 
 # Endpoint para agregar una nueva transacción
@@ -31,28 +39,44 @@ def registrar_usuario():
 def agregar_transaccion():
     datos = request.get_json()
 
-    if not datos or 'de' not in datos or 'para' not in datos or 'monto' not in datos:
-        return jsonify({"error": "Faltan campos requeridos (de, para, monto)"}), 400
+    if not datos or 'transaccion' not in datos or 'clave_publica' not in datos or 'firma' not in datos:
+        print("[❌] Transacción incompleta: falta transaccion, clave_publica o firma")
+        return jsonify({"error": "Faltan campos requeridos: transaccion, clave_publica, firma"}), 400
 
-    transaccion = {
-        "id": str(uuid.uuid4()),
-        "de": datos["de"],
-        "para": datos["para"],
-        "monto": datos["monto"],
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
-    }
+    transaccion = datos["transaccion"]
+    clave_publica_pem = datos["clave_publica"]
+    firma_b64 = datos["firma"]
+
+    # Verificar firma
+    try:
+        mensaje = json.dumps(transaccion, sort_keys=True).encode()
+        firma = base64.b64decode(firma_b64)
+        clave_publica = serialization.load_pem_public_key(clave_publica_pem.encode())
+
+        clave_publica.verify(firma, mensaje, ec.ECDSA(hashes.SHA256()))
+        print("[🔐] Firma verificada correctamente.")
+    except InvalidSignature:
+        print("[❌] Firma inválida")
+        return jsonify({"error": "Firma inválida"}), 400
+    except Exception as e:
+        print("[❌] Error en la validación:", e)
+        return jsonify({"error": f"Error en la validación: {str(e)}"}), 400
+
+    # Agregar ID y timestamp
+    transaccion["id"] = str(uuid.uuid4())
+    transaccion["timestamp"] = time.strftime("%Y-%m-%d %H:%M:%S")
 
     # Guardar transacción en Redis
     redis_client.set(f"transaccion:{transaccion['id']}", json.dumps(transaccion))
-    redis_client.rpush("mempool", transaccion['id'])
+    redis_client.rpush("mempool", transaccion["id"])
 
-    print("[🧾] Transacción agregada:", transaccion)
-    return jsonify({"mensaje": "Transacción recibida", "transaccion": transaccion}), 201
-
+    print("[🧾] Transacción verificada y agregada:", transaccion)
+    return jsonify({"mensaje": "Transacción recibida y válida", "transaccion": transaccion}), 201
 
 # Endpoint para ver todas las transacciones pendientes (opcional)
 @app.route('/transacciones', methods=['GET'])
 def ver_transacciones():
+    print("[🔍] Consultando transacciones pendientes...")
     ids = redis_client.lrange("mempool", 0, -1)
     transacciones = [json.loads(redis_client.get(f"transaccion:{tid}")) for tid in ids]
     return jsonify(transacciones), 200
@@ -60,20 +84,24 @@ def ver_transacciones():
 
 @app.route("/tarea", methods=["GET"])
 def obtener_tarea():
+    print("[⛏️] Buscando tarea en cola de minería...")
     # Conectarse a RabbitMQ y consumir UNA tarea de la cola
     method_frame, header_frame, body = channel.basic_get(queue='mining_tasks', auto_ack=True)
     
     if method_frame:
         tarea = json.loads(body)
+        print("[📤] Tarea de minería entregada:", tarea)
         return jsonify(tarea), 200
     else:
+        print("[🟡] No hay tareas disponibles.")
         return jsonify({"mensaje": "No hay tareas disponibles"}), 204
 
 @app.route('/resultado', methods=['POST'])
 def recibir_resultado_mineria():
     bloque = request.get_json()
-
+    print("[📩] Recibiendo resultado de minería...")
     if not bloque or 'hash' not in bloque or 'nonce' not in bloque:
+        print("[❌] Bloque inválido o incompleto")
         return jsonify({"error": "Bloque inválido o incompleto"}), 400
 
     # Obtener la dificultad desde Redis
@@ -84,9 +112,11 @@ def recibir_resultado_mineria():
     hash_calculado = calcular_hash(bloque)
 
     if hash_calculado != bloque["hash"]:
+        print("[❌] Hash inválido. Calculado:", hash_calculado, "Recibido:", bloque["hash"])
         return jsonify({"error": "Hash inválido"}), 400
 
     if not bloque["hash"].startswith("0" * dificultad):
+        print("[❌] Hash no cumple la dificultad.")
         return jsonify({"error": f"No cumple la dificultad ({dificultad})"}), 400
 
     # Guardar el bloque en Redis
@@ -106,6 +136,7 @@ def calcular_hash(bloque):
     return hashlib.sha256(bloque_str).hexdigest()
 
 def guardar_bloque_en_redis(bloque):
+    print("[💾] Guardando bloque en Redis...")
     hash_bloque = bloque["hash"]
     bloque_id = str(bloque.get("index", 0))
 
@@ -117,6 +148,7 @@ def guardar_bloque_en_redis(bloque):
 
     # Agregar a la lista principal de la blockchain
     redis_client.rpush("blockchain", hash_bloque)
+    print("[📦] Bloque guardado con hash:", hash_bloque)
 
 def obtener_ultimo_hash():
     if redis_client.llen("blockchain") == 0:
@@ -127,6 +159,7 @@ def obtener_ultimo_hash():
     return bloque["hash"]
 
 def crear_tarea_de_mineria(transacciones):
+    print("[⚙️] Creando tarea de minería...")
     tarea = {
         "index": redis_client.llen("blockchain"),  # siguiente bloque
         "transacciones": transacciones,
@@ -143,6 +176,7 @@ def crear_tarea_de_mineria(transacciones):
     print("[📤] Tarea de minería publicada:", tarea)
 
 def crear_bloque_genesis(config):
+    print("[🌱] Creando bloque génesis...")
     transaccion_recompensa = {
         "id": str(uuid.uuid4()),
         "de": "CoinBase",
@@ -162,6 +196,7 @@ def crear_bloque_genesis(config):
     return bloque
 
 def crear_configuracion():
+    print("[⚙️] Configurando parámetros de la blockchain...")
     config = {
         "time": time.strftime("%Y-%m-%d %H:%M:%S"),
         "curva": "secp384r1",
@@ -172,9 +207,11 @@ def crear_configuracion():
         "dificultad": 2
     }
     redis_client.set("configuracion_blockchain", json.dumps(config))
+    print("[⚙️] Configuración almacenada en Redis.")
     return config
 
 def enviar_a_minar(bloque):
+    print("[📤] Enviando bloque a minar...")
     tarea = {
         "bloque": bloque,
         "dificultad": redis_client.get("configuracion_blockchain") and json.loads(redis_client.get("configuracion_blockchain"))["dificultad"] or 1
@@ -184,6 +221,7 @@ def enviar_a_minar(bloque):
 
 
 def inicializar_blockchain():
+    print("[🔧] Inicializando blockchain...")
     if redis_client.llen("blockchain") == 0:
         print("[🧱] No se encontró blockchain. Generando config y bloque génesis...")
 
@@ -197,4 +235,5 @@ def inicializar_blockchain():
 
 if __name__ == "__main__":
     inicializar_blockchain()
+    print("[🚀] Coordinador ejecutándose en http://localhost:5000")
     app.run(debug=True, port=5000)

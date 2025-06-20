@@ -3,6 +3,8 @@ from cryptography.hazmat.primitives import hashes, serialization
 import hashlib
 import json
 import base64
+import requests
+import time
 
 class UsuarioBlockchain:
     def __init__(self, nombre=None):
@@ -54,3 +56,40 @@ class UsuarioBlockchain:
             format=serialization.PrivateFormat.PKCS8,
             encryption_algorithm=serialization.NoEncryption()
         ).decode()
+    
+    def registar(self, url="http://localhost:5000/registro"):
+        data = {
+            "clave_publica": self.exportar_clave_publica()
+        }
+        try:
+            response = requests.post(url, json=data)
+            if response.status_code == 201:
+                print("[✅] Registro exitoso:", response.json())
+            else:
+                print("[❌] Error al registrar:", response.status_code, response.text)
+        except Exception as e:
+            print("[💥] Excepción durante el registro:", e)
+    
+    def enviar_transaccion(self, destino, monto, url_coordinador="http://localhost:5000/transaccion"):
+        transaccion = {
+            "de": self.direccion,
+            "para": destino,
+            "monto": monto,
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+        }
+
+        firma = self.firmar_transaccion(transaccion)
+        clave_publica = self.exportar_clave_publica()
+
+        datos = {
+            "transaccion": transaccion,
+            "clave_publica": clave_publica,
+            "firma": firma
+        }
+
+        response = requests.post(url_coordinador, json=datos)
+
+        if response.status_code == 201:
+            print("[✅] Transacción enviada con éxito:", response.json())
+        else:
+            print("[❌] Error al enviar transacción:", response.status_code, response.text)
