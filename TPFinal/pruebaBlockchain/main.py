@@ -1,3 +1,5 @@
 from usuarios.Usuario import UsuarioBlockchain
 
-bautista = UsuarioBlockchain(nombre = "001")
+usuario1 = UsuarioBlockchain(nombre = "001")
+usuario2 = UsuarioBlockchain(nombre = "002")
+
