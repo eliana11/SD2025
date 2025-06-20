@@ -1,3 +1,4 @@
 {
-    "json.schemas": []
+    "json.schemas": [],
+    "C_Cpp.errorSquiggles": "disabled"
 }

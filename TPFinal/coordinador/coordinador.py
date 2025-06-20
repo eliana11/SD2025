@@ -67,7 +67,7 @@ def crear_bloque_genesis():
             {
                 "time": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "curva": "secp384r1",
-                "alg": "sha1",
+                "alg": "md5",
                 "coins": 21000000
             }
         ],

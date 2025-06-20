@@ -8,6 +8,10 @@
 #include <limits.h> // For ULLONG_MAX
 #include <stdlib.h> // For strtoull
 
+#include "json.hpp"
+
+using json = nlohmann::json;
+
 // ***********************************************************************************
 // CONSTANTES GLOBALES
 // ***********************************************************************************
@@ -180,6 +184,12 @@ int ulltoa_cpu(unsigned long long value, char* buffer) {
 
 // Helper function to concatenate strings for CPU
 int concatenate_cpu(char* dest, const char* s1, int len1, const char* s2, int len2) {
+    // Asegurarse de que el destino tiene suficiente espacio
+    if (len1 + len2 >= MAX_CONCAT_LEN) {
+        // Manejar error o truncar, para este ejemplo, solo imprimir y continuar
+        fprintf(stderr, "Error: Buffer de concatenación insuficiente en concatenate_cpu.\n");
+        // Opcional: Abortar o manejar el error de forma más robusta
+    }
     std::memcpy(dest, s1, len1);
     std::memcpy(dest + len1, s2, len2);
     dest[len1 + len2] = '\0';
@@ -191,7 +201,7 @@ int concatenate_cpu(char* dest, const char* s1, int len1, const char* s2, int le
 // FUNCIÓN PRINCIPAL DE CRACKING EN CPU (UN SOLO HILO)
 // ***********************************************************************************
 bool md5_prefix_cracker_cpu(
-    const unsigned char* base_string, unsigned long long base_string_len,
+    const unsigned char* block_base_string, unsigned long long block_base_string_len, // Nueva cadena base
     const unsigned char* target_prefix_bytes, unsigned int target_prefix_len,
     unsigned char* found_hash, char* found_number_string,
     unsigned long long global_start_range, unsigned long long global_end_range
@@ -206,9 +216,10 @@ bool md5_prefix_cracker_cpu(
         int num_str_len = ulltoa_cpu(current_number, number_str_buffer);
         int full_string_len = concatenate_cpu(
             concatenated_string_buffer,
-            (const char*)base_string, (int)base_string_len,
+            (const char*)block_base_string, (int)block_base_string_len, // Usar block_base_string
             number_str_buffer, num_str_len
         );
+
 
         calculate_md5_hash_cpu((const unsigned char*)concatenated_string_buffer, full_string_len, current_hash);
 
@@ -268,62 +279,99 @@ int hexStringToBytes(const char* hex_string, unsigned char* byte_array) {
 // FUNCIÓN MAIN PARA CPU
 // ***********************************************************************************
 int main(int argc, char* argv[]) {
-    if (argc != 5) {
-        fprintf(stderr, "Uso: %s <hash_prefix_hex> <base_string> <start_number> <end_number>\n", argv[0]);
-        fprintf(stderr, "Ejemplo: %s 0000 test 0 100000000\n", argv[0]);
+    // Se espera 1 argumento: la cadena JSON de la tarea
+    if (argc != 2) {
+        fprintf(stderr, "Uso: %s <tarea_json_string>\n", argv[0]);
+        fprintf(stderr, "Ejemplo: %s '{\"prev_hash\": \"000...\", \"transacciones\": \"[{\"de\":\"A\"...}]\", \"dificultad\": \"00\", \"start_nonce\": 0, \"end_nonce\": 1000000}'\n", argv[0]);
         return 1;
     }
 
-    const char* h_hash_prefix_hex = argv[1];
-    const unsigned char* h_base_string = (const unsigned char*)argv[2];
-    unsigned long long h_start_number = strtoull(argv[3], NULL, 10);
-    unsigned long long h_end_number = strtoull(argv[4], NULL, 10);
+    // --- 1. Leer y parsear el JSON de la tarea ---
+    std::string task_json_string = argv[1];
+    json task_data;
+    try {
+        task_data = json::parse(task_json_string);
+    } catch (const json::parse_error& e) {
+        fprintf(stderr, "Error al parsear el JSON de la tarea: %s\n", e.what());
+        return 1;
+    }
 
-    unsigned char h_target_prefix_bytes[16];
-    int target_prefix_len = hexStringToBytes(h_hash_prefix_hex, h_target_prefix_bytes);
+    // Extraer datos de la tarea JSON
+    std::string prev_hash_str;
+    std::string transactions_str; // Las transacciones como una cadena JSON serializada
+    std::string difficulty_prefix_str;
+    unsigned long long h_start_number;
+    unsigned long long h_end_number;
+
+    try {
+        prev_hash_str = task_data.at("prev_hash").get<std::string>();
+        transactions_str = task_data.at("transacciones").dump(); // Las transacciones son un array JSON, lo serializamos a string
+        difficulty_prefix_str = task_data.at("dificultad").get<std::string>();
+        h_start_number = task_data.at("start_nonce").get<unsigned long long>();
+        h_end_number = task_data.at("end_nonce").get<unsigned long long>();
+    } catch (const json::exception& e) {
+        fprintf(stderr, "Error: Falta un campo requerido en el JSON de la tarea o formato incorrecto: %s\n", e.what());
+        return 1;
+    }
+
+    // Construir la cadena base del bloque para el hash (prev_hash + transacciones_serializadas)
+    // El formato del bloque para el hash es: hash_anterior + json_transacciones + nonce
+    // Así que la cadena base es: hash_anterior + json_transacciones
+    std::string block_base_string_std = prev_hash_str + transactions_str;
+    const unsigned char* h_block_base_string = (const unsigned char*)block_base_string_std.c_str();
+    unsigned long long block_base_string_len = block_base_string_std.length(); // Usar .length() para std::string
+
+    // Verificar si la cadena base más el nonce excederán el buffer
+    if (block_base_string_len + MAX_NUMBER_STR_LEN >= MAX_CONCAT_LEN) {
+        fprintf(stderr, "Error: La longitud de la cadena base del bloque (%llu) más el nonce exceden el buffer (%d). Aumente MAX_CONCAT_LEN o revise los datos.\n", block_base_string_len, MAX_CONCAT_LEN);
+        return 1;
+    }
+
+    unsigned char h_target_prefix_bytes[16]; // Max MD5 hash size
+    // Convertir el prefijo de dificultad hexadecimal a bytes
+    int target_prefix_len = hexStringToBytes(difficulty_prefix_str.c_str(), h_target_prefix_bytes);
 
     if (target_prefix_len == -1 || target_prefix_len == 0 || target_prefix_len > 16) {
-        fprintf(stderr, "Error: El prefijo del hash hexadecimal es inválido o su longitud no es adecuada (max 32 caracteres hex / 16 bytes). Recibido: %s, Longitud de bytes: %d\n", h_hash_prefix_hex, target_prefix_len);
+        fprintf(stderr, "Error: El prefijo de dificultad (%s) es inválido o su longitud no es adecuada (max 32 caracteres hex / 16 bytes). Longitud de bytes: %d\n", difficulty_prefix_str.c_str(), target_prefix_len);
         return 1;
     }
     
-    unsigned long long base_string_len = strlen((const char*)h_base_string);
-    if (base_string_len + MAX_NUMBER_STR_LEN >= MAX_CONCAT_LEN) {
-        fprintf(stderr, "Error: La longitud de la cadena base (%llu) más el número exceden el buffer (%d). Aumente MAX_CONCAT_LEN o reduzca la cadena base.\n", base_string_len, MAX_CONCAT_LEN);
-        return 1;
-    }
-
     if (h_start_number > h_end_number) {
-        fprintf(stderr, "Error: El número de inicio (%llu) no puede ser mayor que el número de fin (%llu).\n", h_start_number, h_end_number);
+        fprintf(stderr, "Error: El número de inicio del nonce (%llu) no puede ser mayor que el número de fin (%llu).\n", h_start_number, h_end_number);
         return 1;
     }
     
     unsigned long long total_numbers_to_search;
-    if (h_end_number < h_start_number) { // Esto ya está cubierto por el if anterior, pero no hace daño
+    if (h_end_number < h_start_number) {
         total_numbers_to_search = 0;
     } else {
         total_numbers_to_search = h_end_number - h_start_number + 1;
     }
 
     if (total_numbers_to_search == 0) {
-        fprintf(stderr, "Error: El rango de búsqueda especificado es vacío. Revise los números de inicio y fin.\n");
-        return 1;
+        // En este caso, el Worker no debería haber enviado una tarea así, pero lo manejamos.
+        json result_json;
+        result_json["status"] = "no_solution_found";
+        result_json["reason"] = "Rango de nonce vacío.";
+        std::cout << result_json.dump() << std::endl; // Imprime JSON a stdout
+        return 0; // Termina con éxito, pero sin solución
     }
 
     unsigned char h_final_hash[16];
     char h_final_number_string[MAX_NUMBER_STR_LEN];
     bool found_solution = false;
 
-    printf("Iniciando búsqueda de prefijo MD5 (CPU): '%s' para la cadena base '%s'\n", h_hash_prefix_hex, h_base_string);
-    printf("Rango de búsqueda: desde %llu hasta %llu\n", h_start_number, h_end_number);
-    printf("Longitud del prefijo a comparar (en bytes): %d\n", target_prefix_len);
-    printf("Espacio de búsqueda total en este rango: %llu números\n", total_numbers_to_search);
-    printf("--- Por favor, espere, esto puede tardar ---\n");
+    // Impresión de estado (para depuración, se puede quitar en producción)
+    fprintf(stderr, "Iniciando minado para hash previo: '%s', dificultad: '%s'\n", prev_hash_str.c_str(), difficulty_prefix_str.c_str());
+    fprintf(stderr, "Rango de nonce: desde %llu hasta %llu\n", h_start_number, h_end_number);
+    fprintf(stderr, "Longitud del prefijo a comparar (en bytes): %d\n", target_prefix_len);
+    fprintf(stderr, "Espacio de búsqueda total en este rango: %llu nonces\n", total_numbers_to_search);
+    fprintf(stderr, "--- Minando (CPU), por favor espere ---\n");
 
     auto start_time = std::chrono::high_resolution_clock::now();
 
     found_solution = md5_prefix_cracker_cpu(
-        h_base_string, base_string_len,
+        h_block_base_string, block_base_string_len,
         h_target_prefix_bytes, target_prefix_len,
         h_final_hash, h_final_number_string,
         h_start_number, h_end_number
@@ -332,20 +380,36 @@ int main(int argc, char* argv[]) {
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> duration = end_time - start_time;
 
+    json result_json; // Objeto JSON para la salida
+
     if (found_solution) {
-        printf("\n--- SOLUCIÓN ENCONTRADA (CPU) ---\n");
-        printf("Número encontrado: %s\n", h_final_number_string);
-        printf("Cadena probada: %s%s\n", (const char*)h_base_string, h_final_number_string);
-        printf("Hash MD5 resultante: ");
+        // Convertir el hash binario a string hexadecimal para la salida JSON
+        char final_hash_hex_str[33]; // 16 bytes * 2 chars/byte + null terminator
         for (int i = 0; i < 16; ++i) {
-            printf("%02x", (unsigned char)h_final_hash[i]);
+            sprintf(&final_hash_hex_str[i*2], "%02x", (unsigned char)h_final_hash[i]);
         }
-        printf("\n");
-        printf("Tiempo de ejecución: %.2f ms\n", duration.count());
+        final_hash_hex_str[32] = '\0'; // Asegura el null terminator
+
+        result_json["status"] = "solution_found";
+        result_json["nonce_found"] = std::stoull(h_final_number_string); // Convierte string a ULL
+        result_json["block_hash_result"] = std::string(final_hash_hex_str);
+        result_json["elapsed_time_ms"] = duration.count();
+
+        fprintf(stderr, "\n--- SOLUCIÓN ENCONTRADA (CPU) ---\n");
+        fprintf(stderr, "Nonce: %s\n", h_final_number_string);
+        fprintf(stderr, "Hash MD5 resultante: %s\n", final_hash_hex_str);
+        fprintf(stderr, "Tiempo de ejecución: %.2f ms\n", duration.count());
+
     } else {
-        printf("\n--- No se encontró una solución en el rango [%llu - %llu] (CPU) ---\n", h_start_number, h_end_number);
-        printf("Tiempo de ejecución: %.2f ms\n", duration.count());
+        result_json["status"] = "no_solution_found";
+        result_json["elapsed_time_ms"] = duration.count();
+        result_json["reason"] = "No se encontró un nonce en el rango especificado que cumpla con la dificultad.";
+        fprintf(stderr, "\n--- No se encontró una solución en el rango [%llu - %llu] (CPU) ---\n", h_start_number, h_end_number);
+        fprintf(stderr, "Tiempo de ejecución: %.2f ms\n", duration.count());
     }
+
+    // Imprimir el resultado JSON a la salida estándar
+    std::cout << result_json.dump() << std::endl;
 
     return 0;
 }
