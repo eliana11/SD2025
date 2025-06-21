@@ -3,6 +3,7 @@ import requests
 import time
 import subprocess # Para ejecutar comandos externos
 import json       # Para manejar datos JSON
+from subprocess import PIPE
 
 COORDINADOR_URL = "http://localhost:5000"
 
@@ -54,22 +55,26 @@ def ejecutar_minero_cuda(tarea):
         tarea_json_str = json.dumps(tarea)
 
         print(f"[WORKER] Iniciando minero C++/CUDA para la tarea ID: {tarea.get('mining_tasks', 'N/A')}...")
-        print(f"[WORKER] Enviando al minero: {tarea_json_str[:200]}..." ) # Imprimir un extracto para depuración
+        print(f"[WORKER] Enviando al minero (extracto): {tarea_json_str[:200]}...") # Imprimir un extracto para depuración
 
-     
         # Ejemplo de comando: ./tu_minero_ejecutable "{'previous_hash': '...', 'difficulty': '00', 'transactions': [...]}"
         comando = [MINERO_EJECUTABLE, tarea_json_str]
         
+        # --- CAMBIOS AQUÍ para compatibilidad con Python 3.6 ---
         resultado_proceso = subprocess.run(
             comando, 
-            capture_output=True, 
-            text=True, 
+            stdout=PIPE,    # Reemplaza capture_output=True
+            stderr=PIPE,    # Reemplaza capture_output=True
             check=True,
             timeout=300 
         )
         
-        salida_minero = resultado_proceso.stdout.strip()
-        # print(f"[WORKER] Salida STDERR del minero (si hay): {resultado_proceso.stderr.strip()}") # Para depuración
+        # Decodificamos la salida manualmente, ya que text=True no está disponible o es problemático en 3.6
+        salida_minero = resultado_proceso.stdout.decode('utf-8').strip()
+        stderr_minero = resultado_proceso.stderr.decode('utf-8').strip()
+        # --- FIN DE CAMBIOS ---
+        
+        # print(f"[WORKER] Salida STDERR del minero (si hay): {stderr_minero}") # Para depuración
         # print(f"[WORKER] Salida STDOUT del minero: {salida_minero}") # Para depuración
 
        
@@ -88,15 +93,16 @@ def ejecutar_minero_cuda(tarea):
 
     except subprocess.CalledProcessError as e:
         print(f"[WORKER] Error al ejecutar el minero C++/CUDA (código {e.returncode}): {e}")
-        print(f"[WORKER] Salida STDERR del minero: {e.stderr}")
-        return {"status": "miner_execution_error", "return_code": e.returncode, "stderr": e.stderr.strip()}
+        # Aseguramos que el stderr también se decodifique correctamente para el log
+        print(f"[WORKER] Salida STDERR del minero: {e.stderr.decode('utf-8').strip()}")
+        return {"status": "miner_execution_error", "return_code": e.returncode, "stderr": e.stderr.decode('utf-8').strip()}
     except FileNotFoundError:
         print(f"[WORKER] Error: El ejecutable del minero no se encontró en la ruta '{MINERO_EJECUTABLE}'.")
         return {"status": "miner_not_found"}
     except Exception as e:
         print(f"[WORKER] Error inesperado en 'ejecutar_minero_cuda': {e}")
         return {"status": "unexpected_error", "details": str(e)}
-
+    
 # --- Bucle Principal del Worker ---
 def bucle_principal_worker():
     print("[WORKER] Worker de minería iniciado. Conectando al Coordinador en", COORDINADOR_URL)
