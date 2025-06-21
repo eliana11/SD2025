@@ -164,7 +164,9 @@ def crear_tarea_de_mineria(transacciones):
         "index": redis_client.llen("blockchain"),  # siguiente bloque
         "transacciones": transacciones,
         "prev_hash": obtener_ultimo_hash(),
-        "dificultad": 2,  # podés hacer configurable esto
+        "dificultad": "00",  # podés hacer configurable esto
+        "start_nonce": 0,
+        "end_nonce": 1000000,  # rango de nonce a probar
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
     }
 
@@ -189,7 +191,12 @@ def crear_bloque_genesis(config):
         "index": 0,
         "transacciones": [transaccion_recompensa],
         "prev_hash": "0" * 64,
-        "nonce": 0
+        "nonce": 0,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "configuracion": config,
+        "dificultad": config["dificultad"],
+        "start_nonce": 0,
+        "end_nonce": 1000000  # rango de nonce a probar
     }
 
     bloque["hash"] = calcular_hash(bloque)
@@ -204,7 +211,7 @@ def crear_configuracion():
         "coins": 21000000,
         "halving": 10,
         "factor": 0.9,
-        "dificultad": 2
+        "dificultad": "00"
     }
     redis_client.set("configuracion_blockchain", json.dumps(config))
     print("[⚙️] Configuración almacenada en Redis.")
@@ -231,7 +238,6 @@ def inicializar_blockchain():
 
     else:
         print("[✅] Blockchain ya existe.")
-
 
 if __name__ == "__main__":
     inicializar_blockchain()

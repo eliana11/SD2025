@@ -4,9 +4,9 @@ import time
 import subprocess # Para ejecutar comandos externos
 import json       # Para manejar datos JSON
 
-COORDINADOR_URL = "http://coordinador:5000"
+COORDINADOR_URL = "http://localhost:5000"
 
-MINERO_EJECUTABLE = "./MineroMD5" 
+MINERO_EJECUTABLE = "./MineroMD5CPU" 
 
 
 def obtener_tarea():
@@ -102,7 +102,8 @@ def bucle_principal_worker():
     print("[WORKER] Worker de minería iniciado. Conectando al Coordinador en", COORDINADOR_URL)
     while True:
         tarea = obtener_tarea()
-        if tarea:
+        if "bloque" in tarea:
+            tarea = tarea["bloque"]  # Asegurarse de que estamos trabajando con el bloque correcto
             if not all(k in tarea for k in ["prev_hash", "transacciones", "dificultad", "start_nonce", "end_nonce"]):
                 print(f"[WORKER] Tarea recibida incompleta o con formato inesperado. Saltando. Tarea: {tarea}")
                 time.sleep(1)
