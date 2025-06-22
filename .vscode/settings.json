@@ -1,6 +1,7 @@
 {
     "json.schemas": [],
     "C_Cpp.errorSquiggles": "disabled",
+<<<<<<< HEAD
     "files.associations": {
         "*.embeddedhtml": "html",
         "algorithm": "cpp",
@@ -79,5 +80,10 @@
         "xtree": "cpp",
         "xutility": "cpp",
         "fstream": "cpp"
+=======
+    "cmake.ignoreCMakeListsMissing": true,
+    "files.associations": {
+        "cstring": "cpp"
+>>>>>>> 01e7831934daa02bd7936c127526948fb5f80357
     }
 }
