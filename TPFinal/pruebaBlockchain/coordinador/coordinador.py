@@ -140,9 +140,9 @@ def recibir_resultado_mineria():
     return jsonify({"mensaje": "Bloque agregado correctamente"}), 200
 
 def calcular_hash(bloque):
-    bloque_str = json.dumps(bloque, sort_keys=True)
+    bloque_str = json.dumps(bloque, sort_keys=True, separators=(',', ':'))
     print("[DEBUG] Calculando hash sobre la siguiente cadena JSON ordenada:")
-    print(bloque_str)  # Esto te muestra exactamente qué string se está hasheando
+    print(bloque_str)
     return hashlib.md5(bloque_str.encode()).hexdigest()
 
 def guardar_bloque_en_redis(bloque):

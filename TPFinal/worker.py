@@ -1,12 +1,12 @@
 import os
 import requests
 import time
-import subprocess # Para ejecutar comandos externos
-import json       # Para manejar datos JSON
-from subprocess import PIPE
+import subprocess
+import json
+import tempfile
 
-COORDINADOR_URL = "http://localhost:5000"
-MINERO_EJECUTABLE = "./MineroMD5CPU.exe"
+COORDINADOR_URL = "http://host.docker.internal:5000"
+MINERO_EJECUTABLE = "./MineroMD5CPU"
 START_NONCE = 0
 END_NONCE = 1000000
 
@@ -51,55 +51,61 @@ def ejecutar_minero_cuda(tarea):
         start_nonce = START_NONCE
         end_nonce = END_NONCE
 
-        print(f"[WORKER] Iniciando minero C++/CUDA para la tarea ID: {tarea.get('mining_tasks', 'N/A')}...")
-        print(f"[WORKER] Enviando al minero (extracto): {tarea_json_str[:200]}...") # Imprimir un extracto para depuración
+        print(f"[WORKER] Iniciando minero C++ con rango nonce [{start_nonce}, {end_nonce}]...")
 
-        # Ejemplo de comando: ./tu_minero_ejecutable "{'previous_hash': '...', 'difficulty': '00', 'transactions': [...]}"
-        comando = [MINERO_EJECUTABLE, tarea_json_str]
-        
-        # --- CAMBIOS AQUÍ para compatibilidad con Python 3.6 ---
-        resultado_proceso = subprocess.run(
-            comando, 
-            stdout=PIPE,    # Reemplaza capture_output=True
-            stderr=PIPE,    # Reemplaza capture_output=True
-            check=True,
-            timeout=300 
-        )
-        
-        # Decodificamos la salida manualmente, ya que text=True no está disponible o es problemático en 3.6
-        salida_minero = resultado_proceso.stdout.decode('utf-8').strip()
-        stderr_minero = resultado_proceso.stderr.decode('utf-8').strip()
-        # --- FIN DE CAMBIOS ---
-        
-        # print(f"[WORKER] Salida STDERR del minero (si hay): {stderr_minero}") # Para depuración
-        # print(f"[WORKER] Salida STDOUT del minero: {salida_minero}") # Para depuración
+        with tempfile.NamedTemporaryFile(mode='w+', suffix='.json', delete=True) as tmp_json:
+            json.dump(tarea, tmp_json)
+            tmp_json.flush()
 
-        print("🪵 [WORKER] Log completo del minero:\n", salida_completa)
+            if not os.path.exists(MINERO_EJECUTABLE):
+                print(f"[WORKER] Error: Ejecutable no encontrado en '{MINERO_EJECUTABLE}'")
+                return {"status": "miner_not_found"}
 
-        try:
-            minero_resultado = json.loads(salida_completa)
-            print("[WORKER] Resultado JSON obtenido:", minero_resultado)
-            if "status" in minero_resultado and "block_hash_result" in minero_resultado:
-                return minero_resultado
+            if not os.access(MINERO_EJECUTABLE, os.X_OK):
+                print(f"[WORKER] Error: Ejecutable sin permisos de ejecución: '{MINERO_EJECUTABLE}'")
+                return {"status": "miner_no_exec_permission"}
+
+            cmd = [os.path.abspath(MINERO_EJECUTABLE), tmp_json.name, str(start_nonce), str(end_nonce)]
+            print(f"[WORKER] Ejecutando comando: {cmd}")
+
+            resultado = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=300
+            )
+
+            salida = resultado.stdout.strip()
+            print(f"[WORKER] LOG completo del minero:\n{salida}")
+
+            # Buscar la última línea que sea un JSON válido
+            lineas = salida.splitlines()
+            posibles_jsons = [l for l in lineas if l.strip().startswith('{') and l.strip().endswith('}')]
+            if not posibles_jsons:
+                print("[WORKER] No se encontró JSON válido en la salida del minero.")
+                return {"status": "invalid_json_output", "details": salida}
+
+            ultima_linea = posibles_jsons[-1].strip()
+            print(f"[WORKER] Intentando parsear JSON:\n{ultima_linea}")
+
+            salida_json = json.loads(ultima_linea)
+
+            if "status" in salida_json:
+                return salida_json
             else:
-                print("[WORKER] Advertencia: La salida del minero no contiene 'status' o 'block_hash_result'")
-                return {"status": "malformed_miner_output", "details": salida_completa}
-        except json.JSONDecodeError:
-            print("[WORKER] Error: La salida del minero no es un JSON válido.")
-            return {"status": "invalid_json_output", "details": salida_completa}
+                return {"status": "malformed_miner_output", "details": ultima_linea}
 
-    except subprocess.CalledProcessError as e:
-        print(f"[WORKER] Error al ejecutar el minero (código {e.returncode}): {e}")
-        # Aseguramos que el stderr también se decodifique correctamente para el log
-        print(f"[WORKER] Log del minero:\n{e.output.decode('utf-8').strip()}")
-        return {"status": "miner_execution_error", "return_code": e.returncode, "stderr": e.output.decode('utf-8').strip()}
+    except subprocess.TimeoutExpired:
+        print("[WORKER] Error: Tiempo de ejecución del minero excedido.")
+        return {"status": "timeout"}
     except FileNotFoundError:
-        print(f"[WORKER] Error: El ejecutable del minero no se encontró en '{MINERO_EJECUTABLE}'.")
+        print(f"[WORKER] Error: No se encontró el ejecutable '{MINERO_EJECUTABLE}'.")
         return {"status": "miner_not_found"}
     except Exception as e:
-        print(f"[WORKER] Error inesperado: {e}")
+        print(f"[WORKER] Error inesperado al ejecutar el minero: {e}")
         return {"status": "unexpected_error", "details": str(e)}
-    
+
 # --- Bucle Principal del Worker ---
 def bucle_principal_worker():
     print("[WORKER] Worker de minería iniciado. Conectando al Coordinador en", COORDINADOR_URL)
@@ -121,10 +127,10 @@ def bucle_principal_worker():
             else:
                 print("[WORKER] Fallo al obtener un resultado válido del minero.")
 
-            time.sleep(1)
+            time.sleep(10)
         else:
             print("[WORKER] Sin tareas disponibles del Coordinador. Esperando...")
-            time.sleep(5)
+            time.sleep(50)
 
 if __name__ == "__main__":
     bucle_principal_worker()
