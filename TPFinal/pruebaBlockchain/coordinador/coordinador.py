@@ -31,6 +31,10 @@ contador_intentos_mineria_global = 0        # Cuántos intentos lleva el bloque 
 timer_ronda_global = None          # Objeto Timer para el timeout de ronda
 timer_resultados_global = None        # Objeto Timer para la ventana de resultados
 mejor_bloque_encontrado_global = None # Variable para almacenar el mejor resultado encontrado
+total_workers_en_ronda = 0
+soluciones_exitosas_en_ronda = 0
+
+
 
 # Lock global para asegurar que solo una ronda se procesa a la vez
 lock_ronda_global = threading.Lock()
@@ -114,30 +118,38 @@ def ver_transacciones():
 
 @app.route("/tarea", methods=["GET"])
 def obtener_tarea():
+    global tarea_mineria_actual_global, total_workers_en_ronda
     print("[⛏️] Buscando tarea en cola de minería...")
     # Conectarse a RabbitMQ y consumir UNA tarea de la cola
-    if tarea_mineria_actual_global:
-        print("[📤] Tarea de minería entregada (desde global):", tarea_mineria_actual_global)
-        return jsonify(tarea_mineria_actual_global), 200
-    else:
-        # Intentar obtener de RabbitMQ si no hay una global activa (esto podría ser redundante si manejas bien las rondas)
-        method_frame, header_frame, body = channel.basic_get(queue='mining_tasks', auto_ack=False) # Important: auto_ack=False
-        if method_frame:
-            tarea = json.loads(body)
-            # Re-publicar la tarea para que otros workers puedan verla si no se consume al instante
-            # o si el worker actual falla.
-            channel.basic_publish(exchange='', routing_key='mining_tasks', body=body)
-            channel.basic_ack(method_frame.delivery_tag) # Acknowledges the original message
-            print("[📤] Tarea de minería entregada (desde RabbitMQ y re-publicada):", tarea)
-            return jsonify(tarea), 200
+    with lock_ronda_global:
+        if tarea_mineria_actual_global:
+            total_workers_en_ronda += 1 # Contar cada solicitud de tarea como un worker activo en la ronda
+            print(f"[WORKER_COUNT] Workers que han solicitado tarea en esta ronda: {total_workers_en_ronda}")
+
+            print("[📤] Tarea de minería entregada (desde global):", tarea_mineria_actual_global)
+            return jsonify(tarea_mineria_actual_global), 200
         else:
-            print("[🟡] No hay tareas disponibles.")
-            return jsonify({"mensaje": "No hay tareas disponibles"}), 204
+            # Intentar obtener de RabbitMQ si no hay una global activa (esto podría ser redundante si manejas bien las rondas)
+            method_frame, header_frame, body = channel.basic_get(queue='mining_tasks', auto_ack=False) # Important: auto_ack=False
+            if method_frame:
+                tarea = json.loads(body)
+                # Re-publicar la tarea para que otros workers puedan verla si no se consume al instante
+                # o si el worker actual falla.
+                channel.basic_publish(exchange='', routing_key='mining_tasks', body=body)
+                channel.basic_ack(method_frame.delivery_tag) # Acknowledges the original message
+                total_workers_en_ronda += 1 # También contar aquí si se saca de la cola
+                print(f"[WORKER_COUNT] Workers que han solicitado tarea en esta ronda: {total_workers_en_ronda}")
+
+                print("[📤] Tarea de minería entregada (desde RabbitMQ y re-publicada):", tarea)
+                return jsonify(tarea), 200
+            else:
+                print("[🟡] No hay tareas disponibles.")
+                return jsonify({"mensaje": "No hay tareas disponibles"}), 204
         
 @app.route('/resultado', methods=['POST'])
 def recibir_resultado_mineria():
-    global mejor_bloque_encontrado_global, tarea_mineria_actual_global, tiempo_inicio_mineria_global
-
+    global mejor_bloque_encontrado_global, tarea_mineria_actual_global, tiempo_inicio_mineria_global, soluciones_exitosas_en_ronda
+    
     bloque = request.get_json()
     print("Recibiendo resultado de minería: ", bloque)
 
@@ -191,6 +203,9 @@ def recibir_resultado_mineria():
         print("Bloque minado recibido y agregado a la blockchain.")
         
         global mejor_bloque_encontrado_global, timer_resultados_global, timer_ronda_global
+
+        soluciones_exitosas_en_ronda += 1 # <-- AÑADIR
+        print(f"Soluciones exitosas recibidas en esta ronda: {soluciones_exitosas_en_ronda}")
 
         # Almacena el mejor bloque encontrado
         mejor_bloque_encontrado_global = {
@@ -264,6 +279,54 @@ def obtener_dificultad_actual():
         return config.get("dificultad", "00")
     return "00"
 
+def ajustar_dificultad():
+    global configuracion_coordinador_global, total_workers_en_ronda, soluciones_exitosas_en_ronda
+    config_blockchain = json.loads(redis_client.get("configuracion_blockchain"))
+    dificultad_actual = config_blockchain.get("dificultad", "00")
+    
+    # Calcular la tasa de éxito
+    tasa_exito = 0.0
+    if total_workers_en_ronda > 0:
+        tasa_exito = soluciones_exitosas_en_ronda / total_workers_en_ronda
+
+    print(f"[DIFICULTAD] Resumen de ronda: {soluciones_exitosas_en_ronda} soluciones exitosas de {total_workers_en_ronda} workers (Tasa: {tasa_exito:.2f})")
+
+    nueva_dificultad = dificultad_actual
+
+    if tasa_exito == 0:
+        if len(dificultad_actual) > 0: 
+            if len(dificultad_actual) % 2 != 0:
+                nueva_dificultad = dificultad_actual[:-1] 
+                if not nueva_dificultad: # Si queda vacía (ej: de '0' a '')
+                    nueva_dificultad = "00"
+            if len(nueva_dificultad) >= 2: # No reducir a menos de '00'
+                nueva_dificultad = nueva_dificultad[:-2] # Quitar dos ceros (un byte completo)
+                if not nueva_dificultad: # Si se vuelve vacía, establecer la mínima
+                    nueva_dificultad = "00" # O la dificultad inicial que consideres mínima
+            else: # Caso para '0' o vacía, no se puede reducir más
+                nueva_dificultad = "00" # Mantener en la dificultad mínima
+        else: # Si ya era "", establecer a "00"
+            nueva_dificultad = "00" # Dificultad mínima por defecto
+        
+        print(f"[DIFICULTAD] Tasa de éxito del 0%. Dificultad reducida de '{dificultad_actual}' a '{nueva_dificultad}'.")
+    elif tasa_exito >= 0.90:
+        nueva_dificultad = dificultad_actual + "00"
+        print(f"[DIFICULTAD] Tasa de éxito del >=90%. Dificultad aumentada de '{dificultad_actual}' a '{nueva_dificultad}'.")
+    elif tasa_exito >= 0.20: 
+        print(f"[DIFICULTAD] Tasa de éxito ~20-90%. Dificultad se mantiene en '{dificultad_actual}'.")
+    else:
+        print(f"[DIFICULTAD] Tasa de éxito entre 0% y 20% (excl. 0%). Dificultad se mantiene en '{dificultad_actual}'.")
+
+    if nueva_dificultad != dificultad_actual:
+        config_blockchain["dificultad"] = nueva_dificultad
+        redis_client.set("configuracion_blockchain", json.dumps(config_blockchain))
+        print(f"[DIFICULTAD] Nueva dificultad '{nueva_dificultad}' guardada en Redis.")
+    else:
+        print("[DIFICULTAD] Dificultad no ha cambiado.")
+
+        # Resetear contadores para la próxima ronda
+    total_workers_en_ronda = 0
+    soluciones_exitosas_en_ronda = 0
 
 def crear_bloque_genesis(config):
     print("[🌱] Creando bloque génesis...")
@@ -328,13 +391,16 @@ def iniciar_ventana_resultados():
 
 def manejar_fin_ronda():
     global timer_resultados_global, contador_intentos_mineria_global, tarea_mineria_actual_global, mejor_bloque_encontrado_global, tiempo_inicio_mineria_global
-    
+    global total_workers_en_ronda, soluciones_exitosas_en_ronda
+
     with lock_ronda_global:
         if timer_resultados_global:
             timer_resultados_global.cancel()
             timer_resultados_global = None
 
         print(f"[🏁] Ronda (incluida ventana de resultados) para bloque {tarea_mineria_actual_global['index'] if tarea_mineria_actual_global else 'N/A'} ha terminado.")
+        
+        ajustar_dificultad()
 
         if mejor_bloque_encontrado_global:
             print("[🎉] Se encontró un bloque válido durante la ronda. Procesando el mejor resultado.")
