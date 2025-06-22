@@ -10,7 +10,8 @@
 #include <stdlib.h> // For strtoull
 
 #include "json_interface.h"
-
+#include "json.hpp" 
+using json = nlohmann::json; // Para usar 'json' directamente
 
 // Incluir CUDA solo si se está compilando con nvcc
 #ifdef __CUDACC__
@@ -19,8 +20,8 @@
 
 
 // --- CONSTANTES GLOBALES (Comunes para CPU y GPU) ---
-#define MAX_CONCAT_LEN 256
-#define MAX_NUMBER_STR_LEN 20
+#define MAX_CONCAT_LEN 8192 
+#define MAX_NUMBER_STR_LEN 20 // Max for ULL is 20 digits + null terminator
 
 // --- MACROS MD5 (Comunes para CPU y GPU) ---
 #define F(x, y, z) (((x) & (y)) | ((~x) & (z)))
@@ -30,8 +31,7 @@
 
 #define ROTL32(x, n) (((x) << (n)) | ((x) >> (32 - (n))))
 
-// --- FUNCIONES DE SOPORTE GENERALES (Para Host, usadas por CPU y por la parte Host de GPU) ---
-
+// --- FUNCIONES DE SOPORTE GENERALES (
 // Converts a hexadecimal character to its integer value
 int hexCharToInt(char c) {
     if (c >= '0' && c <= '9') return c - '0';
@@ -65,8 +65,6 @@ int hexStringToBytes(const char* hex_string, unsigned char* byte_array) {
     return byte_len;
 }
 
-// Helper function to convert unsigned long long to string for CPU (Host)
-// Used by CPU miner and by the Host-side preparation for GPU.
 int ulltoa_host(unsigned long long value, char* buffer) {
     if (value == 0) {
         buffer[0] = '0';
@@ -89,8 +87,6 @@ int ulltoa_host(unsigned long long value, char* buffer) {
     return i;
 }
 
-// Helper function to concatenate strings for CPU (Host)
-// Used by CPU miner.
 int concatenate_host(char* dest, const char* s1, int len1, const char* s2, int len2) {
     if (len1 + len2 >= MAX_CONCAT_LEN) {
         fprintf(stderr, "Error: Buffer de concatenación insuficiente en concatenate_host. (Requested %d, Max %d)\n", len1 + len2, MAX_CONCAT_LEN);
@@ -104,8 +100,8 @@ int concatenate_host(char* dest, const char* s1, int len1, const char* s2, int l
 }
 
 
-// --- CPU MINER IMPLEMENTATION ---
-
+// --- CPU MINER IMPLEMENTATION  ---
+#ifndef __CUDACC__
 // MD5 transform function for CPU.
 void md5_transform_cpu(uint32_t *state, const uint32_t *block) {
     uint32_t a = state[0], b = state[1], c = state[2], d = state[3];
@@ -162,7 +158,7 @@ void md5_transform_cpu(uint32_t *state, const uint32_t *block) {
     a = b + ROTL32(a + H(b, c, d) + block[9] + 0x4E0811A1, 4);
     d = a + ROTL32(d + H(a, b, c) + block[12] + 0xF7537E82, 11);
     c = d + ROTL32(c + H(d, a, b) + block[15] + 0xBD3AF235, 16);
-    b = c + ROTL32(b + H(c, d, a) + block[2] + 0x2AD7D2BB, 23);
+    b = c + ROTL32(b + H(c, d, a) + block[2] + 0x2AD7D2BB, 23); 
 
     // Round 4
     a = b + ROTL32(a + I(b, c, d) + block[0] + 0xFEBC46AA, 6);
@@ -273,6 +269,8 @@ bool md5_prefix_cracker_cpu_wrapper(
     }
     return false;
 }
+#endif // #ifndef __CUDACC__
+
 
 // --- GPU MINER IMPLEMENTATION (only compiled if __CUDACC__ is defined) ---
 
@@ -345,7 +343,7 @@ __device__ void md5_transform_gpu(uint32_t *state, const uint32_t *block) {
     a = b + ROTL32(a + H(b, c, d) + block[9] + 0x4E0811A1, 4);
     d = a + ROTL32(d + H(a, b, c) + block[12] + 0xF7537E82, 11);
     c = d + ROTL32(c + H(d, a, b) + block[15] + 0xBD3AF235, 16);
-    b = c + ROTL32(b + I(c, d, a) + block[2] + 0x2AD7D2BB, 23); // Corregido: 'I' debería ser 'H' aquí.
+    b = c + ROTL32(b + H(c, d, a) + block[2] + 0x2AD7D2BB, 23); 
 
     // Round 4
     a = b + ROTL32(a + I(b, c, d) + block[0] + 0xFEBC46AA, 6);
@@ -416,8 +414,6 @@ __device__ void calculate_md5_hash_on_device(const unsigned char *input_data, un
     }
 }
 
-// Helper function to convert unsigned long long to string on device
-// Returns length of the string
 __device__ int ulltoa_device(unsigned long long value, char* buffer) {
     if (value == 0) {
         buffer[0] = '0';
@@ -517,6 +513,7 @@ __global__ void md5_prefix_cracker_kernel(
 
         int num_str_len = ulltoa_device(current_number, number_str_buffer);
         
+        // La concatenación ahora une la base del JSON (sin nonce) con el nonce
         int full_string_len = concatenate_device(
             concatenated_string_buffer,
             (const char*)d_block_base_string, (int)block_base_string_len,
@@ -565,11 +562,15 @@ bool md5_prefix_cracker_gpu_wrapper(
     unsigned char* d_found_hash = nullptr;
     char* d_found_number_string = nullptr;
 
-    const unsigned int NUM_BLOCKS = 128;
+    // Puedes ajustar estos valores para optimizar el rendimiento de la GPU
+    // Número de bloques
+    const unsigned int NUM_BLOCKS = 128; 
+    // Hilos por bloque
     const unsigned int THREADS_PER_BLOCK = 256;
 
     // Allocate memory on device
-    CHECK_CUDA_ERROR(cudaMalloc((void**)&d_block_base_string, block_base_string_len + 1));
+    // +1 for null terminator for d_block_base_string
+    CHECK_CUDA_ERROR(cudaMalloc((void**)&d_block_base_string, block_base_string_len + 1)); 
     CHECK_CUDA_ERROR(cudaMalloc((void**)&d_target_prefix_bytes, target_prefix_len));
     CHECK_CUDA_ERROR(cudaMalloc((void**)&d_found_flag, sizeof(int)));
     CHECK_CUDA_ERROR(cudaMalloc((void**)&d_found_hash, 16));
@@ -644,26 +645,34 @@ int main(int argc, char* argv[]) {
     std::cout << "DEBUG: End Nonce: " << params.end_nonce << std::endl;
     std::cout << "DEBUG: Index: " << params.index_str << std::endl;
 
-    // --- Preparación del bloque base para el hash ---
-    // Adapta esto a la estructura exacta de tu bloque.
-    // Ejemplo: concatenar index_str, prev_hash_str y transactions_str (si aplica)
+    // --- PREPARACIÓN DEL BLOQUE BASE PARA EL HASH EN GPU ---
+ 
+    json bloque_json_completo_para_hash = json::parse(params.original_json_string);
+    
+    if (!bloque_json_completo_para_hash["nonce"].is_null()) {
+        bloque_json_completo_para_hash.erase("nonce");
+    }
+
+    std::string block_base_string_std = bloque_json_completo_para_hash.dump(-1, ' ', false, nlohmann::json::error_handler_t::strict);
+    
+    // VERIFICAR Y AJUSTAR MAX_CONCAT_LEN
+    // Es crucial que MAX_CONCAT_LEN sea lo suficientemente grande.
+    // Dejar espacio para el nonce más grande (MAX_NUMBER_STR_LEN) y el null terminator.
+    if (block_base_string_std.length() >= MAX_CONCAT_LEN - MAX_NUMBER_STR_LEN - 1) { 
+        std::cerr << "Error: El JSON serializado es demasiado grande para MAX_CONCAT_LEN. "
+                  << "Tamaño actual: " << block_base_string_std.length() << " bytes. "
+                  << "MAX_CONCAT_LEN: " << MAX_CONCAT_LEN << ". Por favor, aumente MAX_CONCAT_LEN." << std::endl;
+        return 1;
+    }
+
     char block_base_buffer[MAX_CONCAT_LEN];
-    int block_base_len = 0;
-
-    // Aquí debes asegurarte de que la concatenación construye el string exactamente
-    // como lo espera tu función de hash MD5 y como lo construye el coordinador.
-    // Por ejemplo, si el bloque es "index" + "prev_hash" + "transacciones"
-    // Deberías concatenar en ese orden.
-    // Ejemplo simplificado, ajusta según tu necesidad:
-    block_base_len = concatenate_host(block_base_buffer, params.index_str.c_str(), params.index_str.length(),
-                                      params.prev_hash_str.c_str(), params.prev_hash_str.length());
-    // Si tienes transactions_str y es parte del bloque base:
-    // block_base_len = concatenate_host(block_base_buffer, block_base_buffer, block_base_len,
-    //                                   params.transactions_str.c_str(), params.transactions_str.length());
-
+    // Copia la cadena serializada al buffer que se enviará a la GPU
+    std::memcpy(block_base_buffer, block_base_string_std.c_str(), block_base_string_std.length());
+    block_base_buffer[block_base_string_std.length()] = '\0'; // Asegurar terminación nula
 
     unsigned char* block_base_bytes = (unsigned char*)block_base_buffer;
-    unsigned long long block_base_string_len = block_base_len;
+    unsigned long long block_base_string_len = block_base_string_std.length(); // Usar la longitud real
+    // --- FIN DE LA PREPARACIÓN ---
 
     // Preparar el prefijo objetivo de dificultad
     unsigned char target_prefix_bytes[16];
@@ -683,21 +692,22 @@ int main(int argc, char* argv[]) {
 #ifdef __CUDACC__
     std::cout << "DEBUG: Intentando minar con GPU..." << std::endl;
     found_solution = md5_prefix_cracker_gpu_wrapper(
-        block_base_bytes, block_base_string_len,
+        block_base_bytes, block_base_string_len, // Estos son los nuevos datos correctos
         target_prefix_bytes, target_prefix_len,
         h_final_hash, h_final_number_string,
-        params.start_nonce, // Usar los parámetros parseados
-        params.end_nonce,   // Usar los parámetros parseados
+        params.start_nonce, 
+        params.end_nonce,   
         elapsed_time_ms
     );
 #else
-    std::cout << "DEBUG: Intentando minar con CPU..." << std::endl;
+    std::cout << "DEBUG: Intentando minar con CPU (solo si __CUDACC__ no está definido)..." << std::endl;
+
     found_solution = md5_prefix_cracker_cpu_wrapper(
         block_base_bytes, block_base_string_len,
         target_prefix_bytes, target_prefix_len,
         h_final_hash, h_final_number_string,
-        params.start_nonce, // Usar los parámetros parseados
-        params.end_nonce    // Usar los parámetros parseados
+        params.start_nonce,
+        params.end_nonce
     );
 #endif
 

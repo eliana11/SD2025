@@ -44,28 +44,17 @@ void guardarResultadoJSON(const std::string &nonce,
 MiningTaskParams parseMiningTaskJSON(const std::string& json_string) {
     MiningTaskParams params;
     params.parse_success = false; // Inicialmente, asumimos que falla
-
+    params.original_json_string = json_string; 
     try {
         json task_json = json::parse(json_string);
 
-        // Intenta obtener cada campo. Usa .value() con un valor por defecto
-        // para evitar excepciones si un campo no existe.
         params.prev_hash_str = task_json.value("prev_hash", "");
-        // Asume que "transacciones" es un array de objetos y si necesitas concatenarlos
-        // deberías hacerlo aquí. Por ahora, si no viene como string, lo dejamos vacío o lo adaptas.
-        // Ejemplo simplificado:
-        // if (task_json.contains("transacciones") && task_json["transacciones"].is_array()) {
-        //     for (const auto& tx : task_json["transacciones"]) {
-        //         params.transactions_str += tx.dump(); // O solo ciertas partes de la transacción
-        //     }
-        // }
         params.difficulty_prefix_str = task_json.value("dificultad", "");
         params.start_nonce = task_json.value("start_nonce", 0ULL);
         params.end_nonce = task_json.value("end_nonce", 0ULL);
         params.index_str = std::to_string(task_json.value("index", 0)); // Convierte a string
 
-        params.parse_success = true; // Si llegamos aquí, el parsing fue exitoso
-
+        params.parse_success = true; 
     } catch (const json::exception& e) {
         std::cerr << "Error al parsear JSON de entrada en json_interface.cpp: " << e.what() << std::endl;
     } catch (const std::exception& e) {

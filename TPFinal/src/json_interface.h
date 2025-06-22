@@ -10,13 +10,13 @@ struct MiningTaskParams {
     std::string difficulty_prefix_str;
     unsigned long long start_nonce;
     unsigned long long end_nonce;
-    std::string index_str; // Para el index del bloque
+    std::string index_str; // Para el index del bloqu
+    std::string original_json_string; // Almacena el JSON de entrada completo
     bool parse_success; // Para indicar si el parsing fue exitoso
 };
 
 // Guarda el resultado en un archivo JSON.
 void guardarResultadoJSON(const std::string &nonce, const std::string &hash_hex, double elapsed_ms);
 
-// Nueva función para parsear el JSON de entrada.
 // Devuelve una estructura con los parámetros.
 MiningTaskParams parseMiningTaskJSON(const std::string& json_string);
