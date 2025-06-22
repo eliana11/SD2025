@@ -81,7 +81,6 @@ def ver_transacciones():
     transacciones = [json.loads(redis_client.get(f"transaccion:{tid}")) for tid in ids]
     return jsonify(transacciones), 200
 
-
 @app.route("/tarea", methods=["GET"])
 def obtener_tarea():
     print("[⛏️] Buscando tarea en cola de minería...")
@@ -99,41 +98,52 @@ def obtener_tarea():
 @app.route('/resultado', methods=['POST'])
 def recibir_resultado_mineria():
     bloque = request.get_json()
-    print("[📩] Recibiendo resultado de minería...")
+    print("Recibiendo resultado de minería: ", bloque)
+
     if not bloque or 'hash' not in bloque or 'nonce' not in bloque:
-        print("[❌] Bloque inválido o incompleto")
+        print("Bloque inválido o incompleto")
         return jsonify({"error": "Bloque inválido o incompleto"}), 400
 
-    # Obtener la dificultad desde Redis
-    config = json.loads(redis_client.get("configuracion_blockchain"))
-    dificultad = config.get("dificultad", 1)
+    # Obtener el bloque original desde Redis (basado en el index o prev_hash)
+    bloque_original_id = bloque.get("index")
+    if bloque_original_id is None:
+        return jsonify({"error": "Falta el index del bloque para verificar el hash"}), 400
 
-    # Recalcular el hash y verificar que coincida y cumpla con la dificultad
-    hash_calculado = calcular_hash(bloque)
+    bloque_guardado_str = redis_client.get(f"tarea_bloque:{bloque_original_id}")
+    if not bloque_guardado_str:
+        return jsonify({"error": "Bloque original no encontrado en Redis"}), 400
+
+    bloque_guardado = json.loads(bloque_guardado_str)
+    bloque_guardado["nonce"] = bloque["nonce"]
+
+    # Recalcular el hash
+    hash_calculado = calcular_hash(bloque_guardado)
 
     if hash_calculado != bloque["hash"]:
-        print("[❌] Hash inválido. Calculado:", hash_calculado, "Recibido:", bloque["hash"])
+        print("Hash inválido. Calculado:", hash_calculado, "Recibido:", bloque["hash"])
         return jsonify({"error": "Hash inválido"}), 400
 
-    if not bloque["hash"].startswith("0" * dificultad):
-        print("[❌] Hash no cumple la dificultad.")
+    # Verificar dificultad
+    config = json.loads(redis_client.get("configuracion_blockchain"))
+    dificultad = config.get("dificultad", "1")
+    if not bloque["hash"].startswith("0" * len(dificultad)):
+        print("Hash no cumple la dificultad.")
         return jsonify({"error": f"No cumple la dificultad ({dificultad})"}), 400
 
-    # Guardar el bloque en Redis
-    guardar_bloque_en_redis(bloque)
-
-    # Eliminar transacciones de mempool
-    for tx in bloque["transacciones"]:
+    # Guardar bloque y limpiar mempool
+    guardar_bloque_en_redis(bloque_guardado)
+    for tx in bloque_guardado["transacciones"]:
         redis_client.delete(f"transaccion:{tx['id']}")
         redis_client.lrem("mempool", 0, tx["id"])
 
-    print("[✅] Bloque minado recibido y agregado a la blockchain.")
+    print("Bloque minado recibido y agregado a la blockchain.")
     return jsonify({"mensaje": "Bloque agregado correctamente"}), 200
 
-
 def calcular_hash(bloque):
-    bloque_str = json.dumps(bloque, sort_keys=True).encode()
-    return hashlib.sha256(bloque_str).hexdigest()
+    bloque_str = json.dumps(bloque, sort_keys=True)
+    print("[DEBUG] Calculando hash sobre la siguiente cadena JSON ordenada:")
+    print(bloque_str)  # Esto te muestra exactamente qué string se está hasheando
+    return hashlib.md5(bloque_str.encode()).hexdigest()
 
 def guardar_bloque_en_redis(bloque):
     print("[💾] Guardando bloque en Redis...")
@@ -158,50 +168,6 @@ def obtener_ultimo_hash():
     bloque = json.loads(bloque_json)
     return bloque["hash"]
 
-def crear_tarea_de_mineria(transacciones):
-    print("[⚙️] Creando tarea de minería...")
-    tarea = {
-        "index": redis_client.llen("blockchain"),  # siguiente bloque
-        "transacciones": transacciones,
-        "prev_hash": obtener_ultimo_hash(),
-        "dificultad": "00",  # podés hacer configurable esto
-        "start_nonce": 0,
-        "end_nonce": 1000000,  # rango de nonce a probar
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
-    }
-
-    channel.basic_publish(
-        exchange='',
-        routing_key='mining_tasks',
-        body=json.dumps(tarea)
-    )
-    print("[📤] Tarea de minería publicada:", tarea)
-
-def crear_bloque_genesis(config):
-    print("[🌱] Creando bloque génesis...")
-    transaccion_recompensa = {
-        "id": str(uuid.uuid4()),
-        "de": "CoinBase",
-        "para": "Bautista",
-        "monto": config["coins"],
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
-    }
-
-    bloque = {
-        "index": 0,
-        "transacciones": [transaccion_recompensa],
-        "prev_hash": "0" * 64,
-        "nonce": 0,
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "configuracion": config,
-        "dificultad": config["dificultad"],
-        "start_nonce": 0,
-        "end_nonce": 1000000  # rango de nonce a probar
-    }
-
-    bloque["hash"] = calcular_hash(bloque)
-    return bloque
-
 def crear_configuracion():
     print("[⚙️] Configurando parámetros de la blockchain...")
     config = {
@@ -217,25 +183,41 @@ def crear_configuracion():
     print("[⚙️] Configuración almacenada en Redis.")
     return config
 
+def crear_bloque_genesis(config):
+    print("[🌱] Creando bloque génesis...")
+    transaccion_origen = {
+        "de": "CoinBase",
+        "para": "Bautista",
+        "monto": config["coins"],
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+    }
+
+    bloque = {
+        "index": 0,
+        "transacciones": [transaccion_origen],
+        "prev_hash": "0" * 64,
+        "nonce": 0,
+        "configuracion": config,
+    }
+
+    return bloque
+
 def enviar_a_minar(bloque):
     print("[📤] Enviando bloque a minar...")
-    tarea = {
-        "bloque": bloque,
-        "dificultad": redis_client.get("configuracion_blockchain") and json.loads(redis_client.get("configuracion_blockchain"))["dificultad"] or 1
-    }
-    channel.basic_publish(exchange='', routing_key='mining_tasks', body=json.dumps(tarea))
-    print("[🚀] Bloque enviado a minar.")
 
+    # Guardar el bloque en Redis antes de enviarlo (sin el hash todavía)
+    redis_client.set(f"tarea_bloque:{bloque['index']}", json.dumps(bloque))
+
+    channel.basic_publish(exchange='', routing_key='mining_tasks', body=json.dumps(bloque))
+    print("[🚀] Bloque enviado a minar:", bloque)
 
 def inicializar_blockchain():
     print("[🔧] Inicializando blockchain...")
     if redis_client.llen("blockchain") == 0:
-        print("[🧱] No se encontró blockchain. Generando config y bloque génesis...")
-
+        print("[🧱] No se encontró blockchain. Generando configuración y bloque génesis...")
         config = crear_configuracion()
         bloque_genesis = crear_bloque_genesis(config)
         enviar_a_minar(bloque_genesis)
-
     else:
         print("[✅] Blockchain ya existe.")
 

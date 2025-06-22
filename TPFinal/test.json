@@ -1,0 +1,22 @@
+{
+    "configuracion": {
+        "alg": "md5",
+        "coins": 21000000,
+        "curva": "secp384r1",
+        "dificultad": "00",
+        "factor": 0.9,
+        "halving": 10,
+        "time": "2025-06-22 03:19:27"
+    },
+    "index": 0,
+    "nonce": 0,
+    "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "transacciones": [
+        {
+        "de": "CoinBase",
+        "monto": 21000000,
+        "para": "Bautista",
+        "timestamp": "2025-06-22 03:19:27"
+        }
+    ]
+}
