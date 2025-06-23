@@ -1,4 +1,4 @@
-from usuarios.Usuario import UsuarioBlockchain
+from TPFinal.pruebaBlockchain.Usuario import UsuarioBlockchain
 
 usuario1 = UsuarioBlockchain(nombre = "001")
 usuario2 = UsuarioBlockchain(nombre = "002")

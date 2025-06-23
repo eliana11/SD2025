@@ -75,14 +75,6 @@ json cargar_bloque_json(const std::string& path) {
     return json::parse(ss.str());
 }
 
-std::string extraer_dificultad(const json& bloque_json) {
-    if (bloque_json.contains("configuracion") && bloque_json["configuracion"].contains("dificultad"))
-        return bloque_json["configuracion"]["dificultad"].get<std::string>();
-    if (bloque_json.contains("dificultad"))
-        return bloque_json["dificultad"].get<std::string>();
-    throw std::runtime_error("Campo dificultad no encontrado");
-}
-
 json minar(json bloque_json, unsigned long long start_nonce, unsigned long long end_nonce, 
            const unsigned char* target_prefix, int prefix_len) {
     unsigned char final_hash[MD5_DIGEST_LENGTH];
@@ -155,7 +147,11 @@ int main(int argc, char* argv[]) {
         json bloque_json = cargar_bloque_json(archivo_json);
 
         log("Extrayendo dificultad...");
-        std::string dificultad_hex = extraer_dificultad(bloque_json);
+        if (!bloque_json.contains("dificultad") || !bloque_json["dificultad"].is_string()) {
+            log("Bloque JSON inválido: falta campo 'dificultad'");
+            return 1;
+        }
+        std::string dificultad_hex = bloque_json["dificultad"];
         log("Dificultad hex: " + dificultad_hex);
 
         unsigned char prefix_bytes[16];
