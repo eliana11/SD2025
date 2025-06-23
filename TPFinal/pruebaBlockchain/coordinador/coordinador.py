@@ -66,6 +66,7 @@ def registrar_usuario():
 def agregar_transaccion():
     datos = request.get_json()
 
+    # Validar campos requeridos
     if not datos or 'transaccion' not in datos or 'clave_publica' not in datos or 'firma' not in datos:
         print("[❌] Transacción incompleta: falta transaccion, clave_publica o firma")
         return jsonify({"error": "Faltan campos requeridos: transaccion, clave_publica, firma"}), 400
@@ -74,7 +75,7 @@ def agregar_transaccion():
     clave_publica_pem = datos["clave_publica"]
     firma_b64 = datos["firma"]
 
-    # Verificar firma
+    # Verificar firma digital
     try:
         mensaje = json.dumps(transaccion, sort_keys=True).encode()
         firma = base64.b64decode(firma_b64)
@@ -89,16 +90,18 @@ def agregar_transaccion():
         print("[❌] Error en la validación:", e)
         return jsonify({"error": f"Error en la validación: {str(e)}"}), 400
 
-    # Agregar ID y timestamp
-    transaccion["id"] = str(uuid.uuid4())
-    transaccion["timestamp"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    crear_nueva_tarea(transaccion)
 
-    # Guardar transacción en Redis
-    redis_client.set(f"transaccion:{transaccion['id']}", json.dumps(transaccion))
-    redis_client.rpush("mempool", transaccion["id"])
+    # Guardar en Redis
+    redis_client.set(f"transaccion:{firma}", json.dumps(transaccion))
+    redis_client.rpush("mempool", firma)
 
     print("[🧾] Transacción verificada y agregada:", transaccion)
-    return jsonify({"mensaje": "Transacción recibida y válida", "transaccion": transaccion}), 201
+    return jsonify({
+        "mensaje": "Transacción recibida y válida",
+        "transaccion": transaccion
+    }), 201
+
 
 # Endpoint para ver todas las transacciones pendientes (opcional)
 @app.route('/transacciones', methods=['GET'])
@@ -129,17 +132,18 @@ def obtener_tarea():
             method_frame, header_frame, body = channel.basic_get(queue='mining_tasks', auto_ack=False)
             if method_frame:
                 tarea = json.loads(body)
-                
-                # ❌ No hacemos ack ni republicamos — el mensaje permanece en la cola
+
+                # ✅ Confirmamos que el mensaje fue recibido y lo sacamos de la cola
+                channel.basic_ack(delivery_tag=method_frame.delivery_tag)
 
                 total_workers_en_ronda += 1
                 print(f"[WORKER_COUNT] Workers que han solicitado tarea en esta ronda: {total_workers_en_ronda}")
-                print("[📤] Tarea de minería entregada (desde RabbitMQ sin eliminar):", tarea)
+                print("[📤] Tarea de minería entregada y eliminada de la cola:", tarea)
                 return jsonify(tarea), 200
             else:
                 print("[🟡] No hay tareas disponibles.")
                 return jsonify({"mensaje": "No hay tareas disponibles"}), 204
-        
+
 @app.route('/resultado', methods=['POST'])
 def recibir_resultado_mineria():
     global mejor_bloque_encontrado_global, tarea_mineria_actual_global, tiempo_inicio_mineria_global, soluciones_exitosas_en_ronda
@@ -198,6 +202,7 @@ def recibir_resultado_mineria():
             for tx in bloque_guardado["transacciones"]:
                 if "id" in tx:
                     redis_client.delete(f"transaccion:{tx['id']}")
+                    redis_client.delete(f"intentos:{bloque_original_id}")
                     redis_client.lrem("mempool", 0, tx["id"])
                 else:
                     print(f"[*] Transacción sin 'id' (CoinBase). No eliminada del mempool. Transacción: {tx}")
@@ -247,7 +252,7 @@ def enviar_recompensa(clave_publica):
     }
     bloque["hash"] = calcular_hash(bloque)
 
-    redis_client.set(f"blockchain:{bloque['index']}", json.dumps(bloque))
+    guardar_bloque_en_redis(bloque)
 
 def calcular_hash(bloque):
     bloque_str = json.dumps(bloque, sort_keys=True, separators=(',', ':'))
@@ -351,7 +356,6 @@ def crear_bloque_genesis(config):
         "dificultad": config.get("dificultad_inicial", "00"), # Dificultad inicial
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")       # Timestamp de creación de la tarea
     }
-    redis_client.set(f"tarea_bloque:{bloque['index']}", json.dumps(bloque))
     return bloque
 
 def enviar_a_minar(bloque):
@@ -361,6 +365,7 @@ def enviar_a_minar(bloque):
 
     # Guardar número de intento en Redis
     redis_client.set(f"intentos:{bloque['index']}", 1)
+    redis_client.set(f"tarea_bloque:{bloque['index']}", json.dumps(bloque))
 
     tiempo_inicio_mineria_global = time.time()
 
@@ -427,7 +432,7 @@ def manejar_fin_ronda():
 
 def programar_creacion_proxima_ronda():
     print(f"[⏸️] Esperando {configuracion_blockchain['cooldown_entre_rondas_seg']} segundos antes de la próxima ronda.")
-    threading.Timer(configuracion_blockchain["cooldown_entre_rondas_seg"], crear_nueva_tarea_bloque).start()
+    threading.Timer(configuracion_blockchain["cooldown_entre_rondas_seg"], crear_nueva_tarea).start()
 
 def obtener_transacciones_para_bloque():
     ids_transacciones = redis_client.lrange("mempool", 0, -1)
@@ -438,28 +443,23 @@ def obtener_transacciones_para_bloque():
             transacciones.append(json.loads(datos_tx))
     return transacciones
 
-def crear_nueva_tarea_bloque(): 
+def crear_nueva_tarea(transacciones=None): 
     global tarea_mineria_actual_global, contador_intentos_mineria_global, tiempo_inicio_mineria_global
     with lock_ronda_global:
         print("[🔧] Preparando nuevo bloque para minar...")
         
-        last_block_hash = obtener_ultimo_hash()
-        next_index = redis_client.llen("blockchain")
-
-        config_blockchain = json.loads(redis_client.get("configuracion_blockchain"))
-        transacciones_para_bloque = obtener_transacciones_para_bloque()
+        prox_indice = redis_client.llen("blockchain")        
         
         new_block = {
-            "index": next_index,
-            "transacciones": transacciones_para_bloque,
-            "prev_hash": last_block_hash,
+            "index": prox_indice,
+            "transacciones": transacciones,
+            "prev_hash": obtener_ultimo_hash(),
             "nonce": 0, # Placeholder, minero lo llenará
-            "configuracion": config_blockchain,
+            "dificultad": obtener_dificultad_inicial(), # Dificultad inicial
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S") # Timestamp de creación de la tarea
         }
 
         enviar_a_minar(new_block) # Reutiliza la función existente enviar_a_minar
-        iniciar_timer_ronda()
         mejor_bloque_encontrado_global = None
 
 def procesar_bloque_encontrado(datos_mejor_bloque):

@@ -75,7 +75,6 @@ class UsuarioBlockchain:
             "de": self.direccion,
             "para": destino,
             "monto": monto,
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
         }
 
         firma = self.firmar_transaccion(transaccion)
