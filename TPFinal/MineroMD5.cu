@@ -1,775 +1,551 @@
 #include <iostream>
+#include <fstream>
+#include <sstream>
 #include <string>
-#include <vector>
 #include <chrono>
-#include <cstring> // For memcpy, strlen
-#include <cstdio>  // For sprintf, fprintf
-#include <algorithm> // For std::reverse
-#include <stdint.h>
-#include <limits.h> // For ULLONG_MAX
-#include <stdlib.h> // For strtoull
+#include <regex> // Para el regex en el host (CPU)
+#include <limits.h> // Para ULLONG_MAX
+#include <cstring>  // Para memcpy en el host, aunque no se usa directamente ahora
+#include <cstdio>   // Para sprintf
 
-#include "json.hpp" // Asegúrate de que nlohmann/json.hpp esté en tu include path
-
-// Incluir CUDA solo si se está compilando con nvcc
-#ifdef __CUDACC__
+// Incluisiones de CUDA
 #include <cuda_runtime.h>
-#endif
+#include <device_launch_parameters.h>
+
+// Incluye la librería JSON (nlohmann/json)
+#include "json.hpp" 
 
 using json = nlohmann::json;
 
-// --- CONSTANTES GLOBALES (Comunes para CPU y GPU) ---
-#define MAX_CONCAT_LEN 256
-#define MAX_NUMBER_STR_LEN 20
+// --- Helper para errores CUDA ---
+template <typename T>
+void cudaCheck(T result, const char* call, const char* file, int line) {
+    if (result != cudaSuccess) {
+        std::cerr << "[CUDA ERROR] " << cudaGetErrorString(result)
+                  << " in " << call << " at " << file << ":" << line << std::endl;
+        std::exit(EXIT_FAILURE);
+    }
+}
+#define CUDA_CHECK(x) cudaCheck((x), #x, __FILE__, __LINE__)
 
-// --- MACROS MD5 (Comunes para CPU y GPU) ---
+// --- Constantes Generales ---
+enum { MD5_DIGEST_LENGTH = 16, MAX_JSON_LEN = 65536, MAX_ULL_STR = 32 };
+
+// --- IMPLEMENTACIÓN DE MD5 EN CUDA (DEVICE) ---
+// Adaptada de varios ejemplos de dominio público. No es altamente optimizada
+// para producción, pero es determinista y correcta para el propósito.
+
+typedef unsigned int uint32;
+
+// Funciones F, G, H, I (según la especificación MD5)
 #define F(x, y, z) (((x) & (y)) | ((~x) & (z)))
 #define G(x, y, z) (((x) & (z)) | ((y) & (~z)))
 #define H(x, y, z) ((x) ^ (y) ^ (z))
 #define I(x, y, z) ((y) ^ ((x) | (~z)))
 
-#define ROTL32(x, n) (((x) << (n)) | ((x) >> (32 - (n))))
+// Rotación izquierda
+#define ROTATE_LEFT(x, n) (((x) << (n)) | ((x) >> (32 - (n))))
 
-// --- FUNCIONES DE SOPORTE GENERALES (Para Host, usadas por CPU y por la parte Host de GPU) ---
+// Constantes de rotación para las 4 rondas de MD5
+#define S11 7
+#define S12 12
+#define S13 17
+#define S14 22
 
-// Converts a hexadecimal character to its integer value
-int hexCharToInt(char c) {
-    if (c >= '0' && c <= '9') return c - '0';
-    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-    return -1; // Invalid hex char
+#define S21 5
+#define S22 9
+#define S23 14
+#define S24 20
+
+#define S31 4
+#define S32 11
+#define S33 16
+#define S34 23
+
+#define S41 6
+#define S42 10
+#define S43 15
+#define S44 21
+
+// Operaciones para cada ronda (utilizan las Sxx definidas arriba)
+#define FF(a, b, c, d, x, s, ac) { \
+  (a) += F((b), (c), (d)) + (x) + (uint32)(ac); \
+  (a) = ROTATE_LEFT((a), (s)); \
+  (a) += (b); \
+}
+#define GG(a, b, c, d, x, s, ac) { \
+  (a) += G((b), (c), (d)) + (x) + (uint32)(ac); \
+  (a) = ROTATE_LEFT((a), (s)); \
+  (a) += (b); \
+}
+#define HH(a, b, c, d, x, s, ac) { \
+  (a) += H((b), (c), (d)) + (x) + (uint32)(ac); \
+  (a) = ROTATE_LEFT((a), (s)); \
+  (a) += (b); \
+}
+#define II(a, b, c, d, x, s, ac) { \
+  (a) += I((b), (c), (d)) + (x) + (uint32)(ac); \
+  (a) = ROTATE_LEFT((a), (s)); \
+  (a) += (b); \
 }
 
-// Converts a hexadecimal string to a byte array
-// Returns the number of bytes written to byte_array, or -1 on error
-int hexStringToBytes(const char* hex_string, unsigned char* byte_array) {
-    int len = std::strlen(hex_string);
-    if (len % 2 != 0) {
-        if (len == 1) { // Handle "1" becoming "01" (e.g., if difficulty is "1" it means "01")
-            int nibble = hexCharToInt(hex_string[0]);
-            if (nibble == -1) return -1;
-            byte_array[0] = (unsigned char)nibble;
-            return 1;
-        }
-        return -1;
-    }
-    int byte_len = len / 2;
-    for (int i = 0; i < byte_len; ++i) {
-        int high_nibble = hexCharToInt(hex_string[i * 2]);
-        int low_nibble = hexCharToInt(hex_string[i * 2 + 1]);
-        if (high_nibble == -1 || low_nibble == -1) {
-            return -1; // Invalid hex character
-        }
-        byte_array[i] = (high_nibble << 4) | low_nibble;
-    }
-    return byte_len;
+// Convertir 4 bytes a un uint32 (little-endian)
+__device__ static uint32 bytes_to_uint32(const unsigned char* bytes) {
+    return ((uint32)bytes[0]       ) |
+           ((uint32)bytes[1] <<  8) |
+           ((uint32)bytes[2] << 16) |
+           ((uint32)bytes[3] << 24);
 }
 
-// Helper function to convert unsigned long long to string for CPU (Host)
-// Used by CPU miner and by the Host-side preparation for GPU.
-int ulltoa_host(unsigned long long value, char* buffer) {
-    if (value == 0) {
-        buffer[0] = '0';
-        buffer[1] = '\0';
-        return 1;
-    }
-    int i = 0;
-    char temp_buffer[MAX_NUMBER_STR_LEN]; // Max for ULL is 20 digits + null terminator
-    int j = 0;
-    unsigned long long temp_val = value;
-    while (temp_val > 0) {
-        temp_buffer[j++] = (temp_val % 10) + '0';
-        temp_val /= 10;
-    }
-    // Reverse the string
-    while (j > 0) {
-        buffer[i++] = temp_buffer[--j];
-    }
-    buffer[i] = '\0';
-    return i;
+// Convertir uint32 a 4 bytes (little-endian)
+__device__ static void uint32_to_bytes(uint32 val, unsigned char* bytes) {
+    bytes[0] = (unsigned char)(val & 0xFF);
+    bytes[1] = (unsigned char)((val >> 8) & 0xFF);
+    bytes[2] = (unsigned char)((val >> 16) & 0xFF);
+    bytes[3] = (unsigned char)((val >> 24) & 0xFF);
 }
 
-// Helper function to concatenate strings for CPU (Host)
-// Used by CPU miner.
-int concatenate_host(char* dest, const char* s1, int len1, const char* s2, int len2) {
-    if (len1 + len2 >= MAX_CONCAT_LEN) {
-        fprintf(stderr, "Error: Buffer de concatenación insuficiente en concatenate_host. (Requested %d, Max %d)\n", len1 + len2, MAX_CONCAT_LEN);
-        // Depending on desired error handling, you might exit or return an error code
-        return -1; 
+// Función MD5 real para CUDA device code
+__device__ void md5_cuda_device(const unsigned char* data, size_t len, unsigned char* digest) {
+    uint32 a_init = 0x67452301;
+    uint32 b_init = 0xEFCDAB89;
+    uint32 c_init = 0x98BADCFE;
+    uint32 d_init = 0x10325476;
+
+    uint32 a = a_init;
+    uint32 b = b_init;
+    uint32 c = c_init;
+    uint32 d = d_init;
+
+    // Calcular longitud de padding
+    size_t original_len_bits = len * 8;
+    // Añadir bit 1 de padding, luego ceros, y 64 bits para la longitud.
+    // len + 1 (para 0x80) + 8 (para longitud de 64 bits)
+    // El 63 es para redondear al siguiente múltiplo de 64
+    size_t padded_len = (len + 1 + 8 + 63) / 64 * 64; 
+    
+    unsigned char padded_data[MAX_JSON_LEN + 64]; 
+    
+    // Copiar los datos originales
+    for (size_t i = 0; i < len; ++i) {
+        padded_data[i] = data[i];
     }
-    std::memcpy(dest, s1, len1);
-    std::memcpy(dest + len1, s2, len2);
-    dest[len1 + len2] = '\0';
-    return len1 + len2;
-}
-
-
-// --- CPU MINER IMPLEMENTATION ---
-
-// MD5 transform function for CPU.
-void md5_transform_cpu(uint32_t *state, const uint32_t *block) {
-    uint32_t a = state[0], b = state[1], c = state[2], d = state[3];
-
-    // Round 1
-    a = b + ROTL32(a + F(b, c, d) + block[0] + 0xD76AA478, 7);
-    d = a + ROTL32(d + F(a, b, c) + block[1] + 0xE8C7B756, 12);
-    c = d + ROTL32(c + F(d, a, b) + block[2] + 0x242070DB, 17);
-    b = c + ROTL32(b + F(c, d, a) + block[3] + 0xC1BDCEEE, 22);
-    a = b + ROTL32(a + F(b, c, d) + block[4] + 0xF57C0FAF, 7);
-    d = a + ROTL32(d + F(a, b, c) + block[5] + 0x4787C62A, 12);
-    c = d + ROTL32(c + F(d, a, b) + block[6] + 0xA8304613, 17);
-    b = c + ROTL32(b + F(c, d, a) + block[7] + 0xFD469501, 22);
-    a = b + ROTL32(a + F(b, c, d) + block[8] + 0x698098D8, 7);
-    d = a + ROTL32(d + F(a, b, c) + block[9] + 0x8B44F7AF, 12);
-    c = d + ROTL32(c + F(d, a, b) + block[10] + 0xFFFF5BB1, 17);
-    b = c + ROTL32(b + F(c, d, a) + block[11] + 0x895CD7BE, 22);
-    a = b + ROTL32(a + F(b, c, d) + block[12] + 0x6B901122, 7);
-    d = a + ROTL32(d + F(a, b, c) + block[13] + 0xFD987193, 12);
-    c = d + ROTL32(c + F(d, a, b) + block[14] + 0xA679438E, 17);
-    b = c + ROTL32(b + F(c, d, a) + block[15] + 0x49B40821, 22);
-
-    // Round 2
-    a = b + ROTL32(a + G(b, c, d) + block[1] + 0xF61E2562, 5);
-    d = a + ROTL32(d + G(a, b, c) + block[6] + 0xC040B340, 9);
-    c = d + ROTL32(c + G(d, a, b) + block[11] + 0x265E5A51, 14);
-    b = c + ROTL32(b + G(c, d, a) + block[0] + 0xE9B6C7AA, 20);
-    a = b + ROTL32(a + G(b, c, d) + block[5] + 0xD62F105D, 5);
-    d = a + ROTL32(d + G(a, b, c) + block[10] + 0x02441453, 9);
-    c = d + ROTL32(c + G(d, a, b) + block[15] + 0xD8A1E681, 14);
-    b = c + ROTL32(b + G(c, d, a) + block[4] + 0xE7D3FBC8, 20);
-    a = b + ROTL32(a + G(b, c, d) + block[9] + 0x21E1CDE6, 5);
-    d = a + ROTL32(d + G(a, b, c) + block[14] + 0xC33707D6, 9);
-    c = d + ROTL32(c + G(d, a, b) + block[3] + 0xF4D50D87, 14);
-    b = c + ROTL32(b + G(c, d, a) + block[8] + 0x455A14ED, 20);
-    a = b + ROTL32(a + G(b, c, d) + block[13] + 0xA9E3E905, 5);
-    d = a + ROTL32(d + G(a, b, c) + block[2] + 0xFCEFA3F8, 9);
-    c = d + ROTL32(c + G(d, a, b) + block[7] + 0x676F02D9, 14);
-    b = c + ROTL32(b + G(c, d, a) + block[12] + 0x8D2A4C8A, 20);
-
-    // Round 3
-    a = b + ROTL32(a + H(b, c, d) + block[5] + 0xFFFA3942, 4);
-    d = a + ROTL32(d + H(a, b, c) + block[8] + 0x8771F681, 11);
-    c = d + ROTL32(c + H(d, a, b) + block[11] + 0x6D9D6122, 16);
-    b = c + ROTL32(b + H(c, d, a) + block[14] + 0xFDE5380C, 23);
-    a = b + ROTL32(a + H(b, c, d) + block[1] + 0xA4BEEA44, 4);
-    d = a + ROTL32(d + H(a, b, c) + block[4] + 0x4BDECFA9, 11);
-    c = d + ROTL32(c + H(d, a, b) + block[7] + 0xF6BB4B60, 16);
-    b = c + ROTL32(b + H(c, d, a) + block[10] + 0xBEBFBC70, 23);
-    a = b + ROTL32(a + H(b, c, d) + block[13] + 0x289B7EC6, 4);
-    d = a + ROTL32(d + H(a, b, c) + block[0] + 0xEAA127FA, 11);
-    c = d + ROTL32(c + H(d, a, b) + block[3] + 0xFE2CE6E0, 16);
-    b = c + ROTL32(b + H(c, d, a) + block[6] + 0xA3014314, 23);
-    a = b + ROTL32(a + H(b, c, d) + block[9] + 0x4E0811A1, 4);
-    d = a + ROTL32(d + H(a, b, c) + block[12] + 0xF7537E82, 11);
-    c = d + ROTL32(c + H(d, a, b) + block[15] + 0xBD3AF235, 16);
-    b = c + ROTL32(b + H(c, d, a) + block[2] + 0x2AD7D2BB, 23);
-
-    // Round 4
-    a = b + ROTL32(a + I(b, c, d) + block[0] + 0xFEBC46AA, 6);
-    d = a + ROTL32(d + I(a, b, c) + block[7] + 0xECD84E7B, 10);
-    c = d + ROTL32(c + I(d, a, b) + block[14] + 0x242070DB, 15);
-    b = c + ROTL32(b + I(c, d, a) + block[5] + 0x858457D, 21);
-    a = b + ROTL32(a + I(b, c, d) + block[12] + 0x6FA87E4F, 6);
-    d = a + ROTL32(d + I(a, b, c) + block[3] + 0xFE2CE6E0, 10);
-    c = d + ROTL32(c + I(d, a, b) + block[10] + 0xA3014314, 15);
-    b = c + ROTL32(b + I(c, d, a) + block[1] + 0x49B40821, 21);
-    a = b + ROTL32(a + I(b, c, d) + block[8] + 0x8771F681, 6);
-    d = a + ROTL32(d + I(a, b, c) + block[15] + 0xBD3AF235, 10);
-    c = d + ROTL32(c + I(d, a, b) + block[6] + 0xF6BB4B60, 15);
-    b = c + ROTL32(b + I(c, d, a) + block[13] + 0x289B7EC6, 21);
-    a = b + ROTL32(a + I(b, c, d) + block[4] + 0x4BDECFA9, 6);
-    d = a + ROTL32(d + I(a, b, c) + block[11] + 0x6D9D6122, 10);
-    c = d + ROTL32(c + I(d, a, b) + block[2] + 0x2AD7D2BB, 15);
-    b = c + ROTL32(b + I(c, d, a) + block[9] + 0xA9E3E905, 21);
-
-    state[0] += a;
-    state[1] += b;
-    state[2] += c;
-    state[3] += d;
-}
-
-// Function to calculate MD5 hash on CPU
-void calculate_md5_hash_cpu(const unsigned char *input_data, unsigned long long input_len, unsigned char *output_hash) {
-    uint32_t state[4] = {0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476};
-
-    unsigned long long total_bits = input_len * 8;
-    unsigned long long padded_length_bits = total_bits + 1;
-    while ((padded_length_bits % 512) != 448) {
-        padded_length_bits++;
+    // Añadir el bit 0x80 y rellenar con ceros
+    padded_data[len] = 0x80; 
+    for (size_t i = len + 1; i < padded_len - 8; ++i) {
+        padded_data[i] = 0x00; 
     }
-    padded_length_bits += 64;
-    unsigned long long padded_length_bytes = padded_length_bits / 8;
-    unsigned long long num_blocks = padded_length_bytes / 64;
+    // Añadir la longitud original en bits (64 bits, little-endian)
+    uint32_to_bytes((uint32)(original_len_bits & 0xFFFFFFFF), &padded_data[padded_len - 8]);
+    uint32_to_bytes((uint32)(original_len_bits >> 32), &padded_data[padded_len - 4]);
 
-    uint32_t current_block[16];
-
-    for (unsigned long long i = 0; i < num_blocks; ++i) {
+    for (size_t i = 0; i < padded_len; i += 64) {
+        uint32 M[16];
         for (int j = 0; j < 16; ++j) {
-            unsigned long long byte_idx = i * 64 + j * 4;
-            current_block[j] = 0;
-
-            for (int k = 0; k < 4; ++k) {
-                if (byte_idx + k < input_len) {
-                    current_block[j] |= ((uint32_t)input_data[byte_idx + k]) << (k * 8);
-                } else if (byte_idx + k == input_len) {
-                    current_block[j] |= ((uint32_t)0x80) << (k * 8);
-                }
-            }
+            M[j] = bytes_to_uint32(&padded_data[i + j * 4]);
         }
 
-        if (i == num_blocks - 1) {
-            current_block[14] = (uint32_t)(total_bits & 0xFFFFFFFF);
-            current_block[15] = (uint32_t)(total_bits >> 32);
-        }
-
-        md5_transform_cpu(state, current_block);
-    }
-
-    for (int i = 0; i < 4; ++i) {
-        output_hash[i * 4 + 0] = (unsigned char)(state[i] & 0xFF);
-        output_hash[i * 4 + 1] = (unsigned char)((state[i] >> 8) & 0xFF);
-        output_hash[i * 4 + 2] = (unsigned char)((state[i] >> 16) & 0xFF);
-        output_hash[i * 4 + 3] = (unsigned char)((state[i] >> 24) & 0xFF);
-    }
-}
-
-// Main cracking function for CPU (single-threaded)
-bool md5_prefix_cracker_cpu_wrapper(
-    const unsigned char* block_base_string, unsigned long long block_base_string_len,
-    const unsigned char* target_prefix_bytes, unsigned int target_prefix_len,
-    unsigned char* found_hash, char* found_number_string,
-    unsigned long long global_start_range, unsigned long long global_end_range
-) {
-    for (unsigned long long current_number = global_start_range; current_number <= global_end_range; ++current_number) {
-        char concatenated_string_buffer[MAX_CONCAT_LEN];
-        char number_str_buffer[MAX_NUMBER_STR_LEN];
-        unsigned char current_hash[16];
-
-        int num_str_len = ulltoa_host(current_number, number_str_buffer);
-        if (num_str_len == -1) return false; // Error converting number to string
-
-        int full_string_len = concatenate_host(
-            concatenated_string_buffer,
-            (const char*)block_base_string, (int)block_base_string_len,
-            number_str_buffer, num_str_len
-        );
-        if (full_string_len == -1) return false; // Error concatenating strings
-
-        calculate_md5_hash_cpu((const unsigned char*)concatenated_string_buffer, full_string_len, current_hash);
-
-        bool prefix_matches = true;
-        for (unsigned int k = 0; k < target_prefix_len; ++k) {
-            if (current_hash[k] != target_prefix_bytes[k]) {
-                prefix_matches = false;
-                break;
-            }
-        }
-
-        if (prefix_matches) {
-            std::memcpy(found_hash, current_hash, 16);
-            std::memcpy(found_number_string, number_str_buffer, num_str_len + 1);
-            return true;
-        }
-    }
-    return false;
-}
-
-// --- GPU MINER IMPLEMENTATION (only compiled if __CUDACC__ is defined) ---
-
-#ifdef __CUDACC__
-
-// Helper function to verify CUDA errors
-#define CHECK_CUDA_ERROR(ans) { gpuAssert((ans), __FILE__, __LINE__); }
-inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=true)
-{
-   if (code != cudaSuccess)
-   {
-      fprintf(stderr,"CUDA Error: %s %s %d\n", cudaGetErrorString(code), file, line);
-      if (abort) exit(code);
-   }
-}
-
-// MD5 transform function for GPU.
-__device__ void md5_transform_gpu(uint32_t *state, const uint32_t *block) {
-    uint32_t a = state[0], b = state[1], c = state[2], d = state[3];
-
-    // Round 1
-    a = b + ROTL32(a + F(b, c, d) + block[0] + 0xD76AA478, 7);
-    d = a + ROTL32(d + F(a, b, c) + block[1] + 0xE8C7B756, 12);
-    c = d + ROTL32(c + F(d, a, b) + block[2] + 0x242070DB, 17);
-    b = c + ROTL32(b + F(c, d, a) + block[3] + 0xC1BDCEEE, 22);
-    a = b + ROTL32(a + F(b, c, d) + block[4] + 0xF57C0FAF, 7);
-    d = a + ROTL32(d + F(a, b, c) + block[5] + 0x4787C62A, 12);
-    c = d + ROTL32(c + F(d, a, b) + block[6] + 0xA8304613, 17);
-    b = c + ROTL32(b + F(c, d, a) + block[7] + 0xFD469501, 22);
-    a = b + ROTL32(a + F(b, c, d) + block[8] + 0x698098D8, 7);
-    d = a + ROTL32(d + F(a, b, c) + block[9] + 0x8B44F7AF, 12);
-    c = d + ROTL32(c + F(d, a, b) + block[10] + 0xFFFF5BB1, 17);
-    b = c + ROTL32(b + F(c, d, a) + block[11] + 0x895CD7BE, 22);
-    a = b + ROTL32(a + F(b, c, d) + block[12] + 0x6B901122, 7);
-    d = a + ROTL32(d + F(a, b, c) + block[13] + 0xFD987193, 12);
-    c = d + ROTL32(c + F(d, a, b) + block[14] + 0xA679438E, 17);
-    b = c + ROTL32(b + F(c, d, a) + block[15] + 0x49B40821, 22);
-
-    // Round 2
-    a = b + ROTL32(a + G(b, c, d) + block[1] + 0xF61E2562, 5);
-    d = a + ROTL32(d + G(a, b, c) + block[6] + 0xC040B340, 9);
-    c = d + ROTL32(c + G(d, a, b) + block[11] + 0x265E5A51, 14);
-    b = c + ROTL32(b + G(c, d, a) + block[0] + 0xE9B6C7AA, 20);
-    a = b + ROTL32(a + G(b, c, d) + block[5] + 0xD62F105D, 5);
-    d = a + ROTL32(d + G(a, b, c) + block[10] + 0x02441453, 9);
-    c = d + ROTL32(c + G(d, a, b) + block[15] + 0xD8A1E681, 14);
-    b = c + ROTL32(b + G(c, d, a) + block[4] + 0xE7D3FBC8, 20);
-    a = b + ROTL32(a + G(b, c, d) + block[9] + 0x21E1CDE6, 5);
-    d = a + ROTL32(d + G(a, b, c) + block[14] + 0xC33707D6, 9);
-    c = d + ROTL32(c + G(d, a, b) + block[3] + 0xF4D50D87, 14);
-    b = c + ROTL32(b + G(c, d, a) + block[8] + 0x455A14ED, 20);
-    a = b + ROTL32(a + G(b, c, d) + block[13] + 0xA9E3E905, 5);
-    d = a + ROTL32(d + G(a, b, c) + block[2] + 0xFCEFA3F8, 9);
-    c = d + ROTL32(c + G(d, a, b) + block[7] + 0x676F02D9, 14);
-    b = c + ROTL32(b + G(c, d, a) + block[12] + 0x8D2A4C8A, 20);
-
-    // Round 3
-    a = b + ROTL32(a + H(b, c, d) + block[5] + 0xFFFA3942, 4);
-    d = a + ROTL32(d + H(a, b, c) + block[8] + 0x8771F681, 11);
-    c = d + ROTL32(c + H(d, a, b) + block[11] + 0x6D9D6122, 16);
-    b = c + ROTL32(b + H(c, d, a) + block[14] + 0xFDE5380C, 23);
-    a = b + ROTL32(a + H(b, c, d) + block[1] + 0xA4BEEA44, 4);
-    d = a + ROTL32(d + H(a, b, c) + block[4] + 0x4BDECFA9, 11);
-    c = d + ROTL32(c + H(d, a, b) + block[7] + 0xF6BB4B60, 16);
-    b = c + ROTL32(b + H(c, d, a) + block[10] + 0xBEBFBC70, 23);
-    a = b + ROTL32(a + H(b, c, d) + block[13] + 0x289B7EC6, 4);
-    d = a + ROTL32(d + H(a, b, c) + block[0] + 0xEAA127FA, 11);
-    c = d + ROTL32(c + H(d, a, b) + block[3] + 0xFE2CE6E0, 16);
-    b = c + ROTL32(b + H(c, d, a) + block[6] + 0xA3014314, 23);
-    a = b + ROTL32(a + H(b, c, d) + block[9] + 0x4E0811A1, 4);
-    d = a + ROTL32(d + H(a, b, c) + block[12] + 0xF7537E82, 11);
-    c = d + ROTL32(c + H(d, a, b) + block[15] + 0xBD3AF235, 16);
-    b = c + ROTL32(b + I(c, d, a) + block[2] + 0x2AD7D2BB, 23); // Corregido: 'I' debería ser 'H' aquí.
-
-    // Round 4
-    a = b + ROTL32(a + I(b, c, d) + block[0] + 0xFEBC46AA, 6);
-    d = a + ROTL32(d + I(a, b, c) + block[7] + 0xECD84E7B, 10);
-    c = d + ROTL32(c + I(d, a, b) + block[14] + 0x242070DB, 15);
-    b = c + ROTL32(b + I(c, d, a) + block[5] + 0x858457D, 21);
-    a = b + ROTL32(a + I(b, c, d) + block[12] + 0x6FA87E4F, 6);
-    d = a + ROTL32(d + I(a, b, c) + block[3] + 0xFE2CE6E0, 10);
-    c = d + ROTL32(c + I(d, a, b) + block[10] + 0xA3014314, 15);
-    b = c + ROTL32(b + I(c, d, a) + block[1] + 0x49B40821, 21);
-    a = b + ROTL32(a + I(b, c, d) + block[8] + 0x8771F681, 6);
-    d = a + ROTL32(d + I(a, b, c) + block[15] + 0xBD3AF235, 10);
-    c = d + ROTL32(c + I(d, a, b) + block[6] + 0xF6BB4B60, 15);
-    b = c + ROTL32(b + I(c, d, a) + block[13] + 0x289B7EC6, 21);
-    a = b + ROTL32(a + I(b, c, d) + block[4] + 0x4BDECFA9, 6);
-    d = a + ROTL32(d + I(a, b, c) + block[11] + 0x6D9D6122, 10);
-    c = d + ROTL32(c + I(d, a, b) + block[2] + 0x2AD7D2BB, 15);
-    b = c + ROTL32(b + I(c, d, a) + block[9] + 0xA9E3E905, 21);
-
-    state[0] += a;
-    state[1] += b;
-    state[2] += c;
-    state[3] += d;
-}
-
-// Function to calculate MD5 hash on GPU (adapted from original md5_kernel)
-__device__ void calculate_md5_hash_on_device(const unsigned char *input_data, unsigned long long input_len, unsigned char *output_hash) {
-    uint32_t state[4] = {0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476};
-
-    unsigned long long total_bits = input_len * 8;
-    unsigned long long padded_length_bits = total_bits + 1;
-    while ((padded_length_bits % 512) != 448) {
-        padded_length_bits++;
-    }
-    padded_length_bits += 64;
-    unsigned long long padded_length_bytes = padded_length_bits / 8;
-    unsigned long long num_blocks = padded_length_bytes / 64;
-
-    uint32_t current_block[16];
-
-    for (unsigned long long i = 0; i < num_blocks; ++i) {
-        for (int j = 0; j < 16; ++j) {
-            unsigned long long byte_idx = i * 64 + j * 4;
-            current_block[j] = 0;
-
-            for (int k = 0; k < 4; ++k) {
-                if (byte_idx + k < input_len) {
-                    current_block[j] |= ((uint32_t)input_data[byte_idx + k]) << (k * 8);
-                } else if (byte_idx + k == input_len) {
-                    current_block[j] |= ((uint32_t)0x80) << (k * 8);
-                }
-            }
-        }
-
-        if (i == num_blocks - 1) {
-            current_block[14] = (uint32_t)(total_bits & 0xFFFFFFFF);
-            current_block[15] = (uint32_t)(total_bits >> 32);
-        }
-
-        md5_transform_gpu(state, current_block); // Call the GPU-specific transform
-    }
-
-    for (int i = 0; i < 4; ++i) {
-        output_hash[i * 4 + 0] = (unsigned char)(state[i] & 0xFF);
-        output_hash[i * 4 + 1] = (unsigned char)((state[i] >> 8) & 0xFF);
-        output_hash[i * 4 + 2] = (unsigned char)((state[i] >> 16) & 0xFF);
-        output_hash[i * 4 + 3] = (unsigned char)((state[i] >> 24) & 0xFF);
-    }
-}
-
-// Helper function to convert unsigned long long to string on device
-// Returns length of the string
-__device__ int ulltoa_device(unsigned long long value, char* buffer) {
-    if (value == 0) {
-        buffer[0] = '0';
-        buffer[1] = '\0';
-        return 1;
-    }
-    int i = 0;
-    char temp_buffer[MAX_NUMBER_STR_LEN]; // Max for ULL is 20 digits + null terminator
-    int j = 0;
-    unsigned long long temp_val = value; // Use a temp variable for calculation
-    while (temp_val > 0) {
-        temp_buffer[j++] = (temp_val % 10) + '0';
-        temp_val /= 10;
-    }
-    // Reverse the string
-    while (j > 0) {
-        buffer[i++] = temp_buffer[--j];
-    }
-    buffer[i] = '\0';
-    return i;
-}
-
-// Helper function to concatenate strings on device
-__device__ int concatenate_device(char* dest, const char* s1, int len1, const char* s2, int len2) {
-    // Note: No error checking for buffer overflow on device side for brevity.
-    // Ensure MAX_CONCAT_LEN is large enough at compile time.
-    for (int i = 0; i < len1; ++i) {
-        dest[i] = s1[i];
-    }
-    for (int i = 0; i < len2; ++i) {
-        dest[len1 + i] = s2[i];
-    }
-    dest[len1 + len2] = '\0';
-    return len1 + len2;
-}
-
-// CUDA Kernel
-__global__ void md5_prefix_cracker_kernel(
-    const unsigned char* d_block_base_string, unsigned long long block_base_string_len,
-    const unsigned char* d_target_prefix_bytes, unsigned int target_prefix_len,
-    volatile int* d_found_flag,
-    unsigned char* d_found_hash,
-    char* d_found_number_string,
-    unsigned long long global_start_range,
-    unsigned long long global_end_range
-) {
-    unsigned long long thread_id = blockIdx.x * blockDim.x + threadIdx.x;
-    unsigned long long num_threads_in_grid = gridDim.x * blockDim.x;
-
-    unsigned long long total_numbers_to_search;
-    if (global_end_range < global_start_range) {
-        total_numbers_to_search = 0;
-    } else {
-        total_numbers_to_search = global_end_range - global_start_range + 1;
-    }
-
-    if (total_numbers_to_search == 0) {
-        return;
-    }
-
-    unsigned long long numbers_per_thread_segment_base = total_numbers_to_search / num_threads_in_grid;
-    unsigned long long remainder = total_numbers_to_search % num_threads_in_grid;
-
-    unsigned long long thread_start_offset = global_start_range + thread_id * numbers_per_thread_segment_base;
-    if (thread_id < remainder) {
-        thread_start_offset += thread_id;
-    } else {
-        thread_start_offset += remainder;
-    }
-
-    unsigned long long thread_end_offset = thread_start_offset + numbers_per_thread_segment_base - 1;
-    if (thread_id < remainder) {
-        thread_end_offset++;
-    }
-
-    if (thread_end_offset > global_end_range) {
-        thread_end_offset = global_end_range;
-    }
-
-    if (thread_start_offset > global_end_range || thread_start_offset > thread_end_offset) {
-        return;
-    }
-
-    char concatenated_string_buffer[MAX_CONCAT_LEN];
-    char number_str_buffer[MAX_NUMBER_STR_LEN];
-    unsigned char current_hash[16];
-
-    // Copy the block_base_string to local memory once per thread
-    for (int i = 0; i < block_base_string_len; ++i) {
-        concatenated_string_buffer[i] = d_block_base_string[i];
-    }
-
-    for (unsigned long long current_number = thread_start_offset; current_number <= thread_end_offset; ++current_number) {
-        if (*d_found_flag == 1) {
-             return;
-        }
-
-        int num_str_len = ulltoa_device(current_number, number_str_buffer);
-        
-        int full_string_len = concatenate_device(
-            concatenated_string_buffer,
-            (const char*)d_block_base_string, (int)block_base_string_len,
-            number_str_buffer, num_str_len
-        );
-        
-        calculate_md5_hash_on_device((const unsigned char*)concatenated_string_buffer, full_string_len, current_hash);
-
-        bool prefix_matches = true;
-        for (unsigned int k = 0; k < target_prefix_len; ++k) {
-            if (current_hash[k] != d_target_prefix_bytes[k]) {
-                prefix_matches = false;
-                break;
-            }
-        }
-
-        if (prefix_matches) {
-            if (atomicCAS((int*)d_found_flag, 0, 1) == 0) {
-                for (int k = 0; k < 16; ++k) {
-                    d_found_hash[k] = current_hash[k];
-                }
-                int str_idx = 0;
-                while(number_str_buffer[str_idx] != '\0' && str_idx < MAX_NUMBER_STR_LEN) {
-                    d_found_number_string[str_idx] = number_str_buffer[str_idx];
-                    str_idx++;
-                }
-                d_found_number_string[str_idx] = '\0';
-            }
-            return;
-        }
-    }
-}
-
-// Wrapper function to run the GPU mining logic
-bool md5_prefix_cracker_gpu_wrapper(
-    const unsigned char* h_block_base_string, unsigned long long block_base_string_len,
-    const unsigned char* h_target_prefix_bytes, unsigned int target_prefix_len,
-    unsigned char* h_final_hash, char* h_final_number_string,
-    unsigned long long h_start_number, unsigned long long h_end_number,
-    double& elapsed_time_ms // Pass by reference to return time
-) {
-    // Device pointers
-    unsigned char* d_block_base_string = nullptr;
-    unsigned char* d_target_prefix_bytes = nullptr;
-    volatile int* d_found_flag = nullptr;
-    unsigned char* d_found_hash = nullptr;
-    char* d_found_number_string = nullptr;
-
-    const unsigned int NUM_BLOCKS = 128;
-    const unsigned int THREADS_PER_BLOCK = 256;
-
-    // Allocate memory on device
-    CHECK_CUDA_ERROR(cudaMalloc((void**)&d_block_base_string, block_base_string_len + 1));
-    CHECK_CUDA_ERROR(cudaMalloc((void**)&d_target_prefix_bytes, target_prefix_len));
-    CHECK_CUDA_ERROR(cudaMalloc((void**)&d_found_flag, sizeof(int)));
-    CHECK_CUDA_ERROR(cudaMalloc((void**)&d_found_hash, 16));
-    CHECK_CUDA_ERROR(cudaMalloc((void**)&d_found_number_string, MAX_NUMBER_STR_LEN));
-
-    // Copy data from host to device
-    CHECK_CUDA_ERROR(cudaMemcpy(d_block_base_string, h_block_base_string, block_base_string_len + 1, cudaMemcpyHostToDevice));
-    CHECK_CUDA_ERROR(cudaMemcpy(d_target_prefix_bytes, h_target_prefix_bytes, target_prefix_len, cudaMemcpyHostToDevice));
-    CHECK_CUDA_ERROR(cudaMemset((void*)d_found_flag, 0, sizeof(int)));
-
-    // Configure and launch kernel
-    dim3 blocks(NUM_BLOCKS);
-    dim3 threads(THREADS_PER_BLOCK);
-
-    auto start_time = std::chrono::high_resolution_clock::now();
-
-    md5_prefix_cracker_kernel<<<blocks, threads>>>(
-        d_block_base_string, block_base_string_len,
-        d_target_prefix_bytes, target_prefix_len,
-        d_found_flag, d_found_hash, d_found_number_string,
-        h_start_number,
-        h_end_number
-    );
-    CHECK_CUDA_ERROR(cudaGetLastError()); // Check for errors after kernel launch
-
-    CHECK_CUDA_ERROR(cudaDeviceSynchronize());
-    auto end_time = std::chrono::high_resolution_clock::now();
-    elapsed_time_ms = std::chrono::duration<double, std::milli>(end_time - start_time).count();
-
-    int h_found_flag = 0;
-    CHECK_CUDA_ERROR(cudaMemcpy(&h_found_flag, (const void*)d_found_flag, sizeof(int), cudaMemcpyDeviceToHost));
-
-    if (h_found_flag == 1) {
-        CHECK_CUDA_ERROR(cudaMemcpy(h_final_hash, d_found_hash, 16, cudaMemcpyDeviceToHost));
-        CHECK_CUDA_ERROR(cudaMemcpy(h_final_number_string, d_found_number_string, MAX_NUMBER_STR_LEN, cudaMemcpyDeviceToHost));
-    }
-
-    // Free device memory
-    cudaFree((void*)d_found_flag);
-    cudaFree(d_block_base_string);
-    cudaFree(d_target_prefix_bytes);
-    cudaFree(d_found_hash);
-    cudaFree(d_found_number_string);
-
-    return h_found_flag == 1;
-}
-
-#endif // __CUDACC__
-
-
-// --- MAIN FUNCTION (Common for both CPU and GPU paths) ---
-int main(int argc, char* argv[]) {
-    if (argc != 2) {
-        fprintf(stderr, "Uso: %s <tarea_json_string>\n", argv[0]);
-        return 1;
-    }
-
-    std::string task_json_string = argv[1];
-    json task_data;
-    try {
-        task_data = json::parse(task_json_string);
-    } catch (const json::parse_error& e) {
-        fprintf(stderr, "Error al parsear el JSON de la tarea: %s\n", e.what());
-        return 1;
-    }
-
-    std::string prev_hash_str;
-    std::string transactions_str;
-    std::string difficulty_prefix_str;
-    unsigned long long h_start_number;
-    unsigned long long h_end_number;
-
-    try {
-        prev_hash_str = task_data.at("prev_hash").get<std::string>();
-        transactions_str = task_data.at("transacciones").dump();
-        difficulty_prefix_str = task_data.at("dificultad").get<std::string>();
-        h_start_number = task_data.at("start_nonce").get<unsigned long long>();
-        h_end_number = task_data.at("end_nonce").get<unsigned long long>();
-    } catch (const json::exception& e) {
-        fprintf(stderr, "Error: Falta un campo requerido en el JSON de la tarea o formato incorrecto: %s\n", e.what());
-        return 1;
-    }
-
-    std::string block_base_string_std = prev_hash_str + transactions_str;
-    const unsigned char* h_block_base_string = (const unsigned char*)block_base_string_std.c_str();
-    unsigned long long block_base_string_len = block_base_string_std.length();
-
-    if (block_base_string_len + MAX_NUMBER_STR_LEN >= MAX_CONCAT_LEN) {
-        fprintf(stderr, "Error: La longitud de la cadena base del bloque (%llu) más el nonce exceden el buffer (%d). Aumente MAX_CONCAT_LEN o revise los datos.\n", block_base_string_len, MAX_CONCAT_LEN);
-        return 1;
-    }
-
-    unsigned char h_target_prefix_bytes[16];
-    int target_prefix_len = hexStringToBytes(difficulty_prefix_str.c_str(), h_target_prefix_bytes);
-
-    if (target_prefix_len == -1 || target_prefix_len == 0 || target_prefix_len > 16) {
-        fprintf(stderr, "Error: El prefijo de dificultad ('%s') es inválido o su longitud no es adecuada (max 32 caracteres hex / 16 bytes). Longitud de bytes: %d\n", difficulty_prefix_str.c_str(), target_prefix_len);
-        return 1;
-    }
-
-    if (h_start_number > h_end_number) {
-        json result_json;
-        result_json["status"] = "no_solution_found";
-        result_json["reason"] = "Rango de nonce vacío.";
-        std::cout << result_json.dump() << std::endl;
-        return 0;
+        uint32 AA = a, BB = b, CC = c, DD = d;
+
+        // Ronda 1
+        FF(a, b, c, d, M[0], S11, 0xD76AA478);
+        FF(d, a, b, c, M[1], S12, 0xE8C7B756);
+        FF(c, d, a, b, M[2], S13, 0x242070DB);
+        FF(b, c, d, a, M[3], S14, 0xC1BDCEEE);
+        FF(a, b, c, d, M[4], S11, 0xF57C0FAF);
+        FF(d, a, b, c, M[5], S12, 0x4787C62A);
+        FF(c, d, a, b, M[6], S13, 0xA8304613);
+        FF(b, c, d, a, M[7], S14, 0xFD469501);
+        FF(a, b, c, d, M[8], S11, 0x698098D8);
+        FF(d, a, b, c, M[9], S12, 0x8B44F7AF);
+        FF(c, d, a, b, M[10], S13, 0xFFFF5BB1);
+        FF(b, c, d, a, M[11], S14, 0x895CD7BE);
+        FF(a, b, c, d, M[12], S11, 0x6B901122);
+        FF(d, a, b, c, M[13], S12, 0xFD987193);
+        FF(c, d, a, b, M[14], S13, 0xA679438E);
+        FF(b, c, d, a, M[15], S14, 0x49B40821);
+
+        // Ronda 2
+        GG(a, b, c, d, M[1], S21, 0xF61E2562);
+        GG(d, a, b, c, M[6], S22, 0xC040B340);
+        GG(c, d, a, b, M[11], S23, 0x265E5A51);
+        GG(b, c, d, a, M[0], S24, 0xE9B6C7AA);
+        GG(a, b, c, d, M[5], S21, 0xD62F105D);
+        GG(d, a, b, c, M[10], S22, 0x02441453);
+        GG(c, d, a, b, M[15], S23, 0xD8A1E681);
+        GG(b, c, d, a, M[4], S24, 0xE7D3FBC8);
+        GG(a, b, c, d, M[9], S21, 0x21E1CDE6);
+        GG(d, a, b, c, M[14], S22, 0xC33707D6);
+        GG(c, d, a, b, M[3], S23, 0xF4D50D87);
+        GG(b, c, d, a, M[8], S24, 0x455A14ED);
+        GG(a, b, c, d, M[13], S21, 0xA9E3E905);
+        GG(d, a, b, c, M[2], S22, 0xFCEFA3F8);
+        GG(c, d, a, b, M[7], S23, 0x676F02D9);
+        GG(b, c, d, a, M[12], S24, 0x8D2A4C8A);
+
+        // Ronda 3
+        HH(a, b, c, d, M[5], S31, 0xFFFA3942);
+        HH(d, a, b, c, M[8], S32, 0x8771F681);
+        HH(c, d, a, b, M[11], S33, 0x6D9D6122);
+        HH(b, c, d, a, M[14], S34, 0xFDE5380C);
+        HH(a, b, c, d, M[1], S31, 0xA4BEEA44);
+        HH(d, a, b, c, M[4], S32, 0x4BDECFA9);
+        HH(c, d, a, b, M[7], S33, 0xF6BB4B60);
+        HH(b, c, d, a, M[10], S34, 0xBEBFBC70);
+        HH(a, b, c, d, M[13], S31, 0x289B7EC6);
+        HH(d, a, b, c, M[0], S32, 0xEAA127FA);
+        HH(c, d, a, b, M[3], S33, 0xD4EF3085);
+        HH(b, c, d, a, M[6], S34, 0x04881D05);
+        HH(a, b, c, d, M[9], S31, 0xD9D4D039);
+        HH(d, a, b, c, M[12], S32, 0xE6DB99E5);
+        HH(c, d, a, b, M[15], S33, 0x1FA27CF8);
+        HH(b, c, d, a, M[2], S34, 0xC4AC5665);
+
+        // Ronda 4
+        II(a, b, c, d, M[0], S41, 0xF4292244);
+        II(d, a, b, c, M[7], S42, 0x432AFF97);
+        II(c, d, a, b, M[14], S43, 0xAB9423A7);
+        II(b, c, d, a, M[5], S44, 0xFC93A039);
+        II(a, b, c, d, M[12], S41, 0x655B59C3);
+        II(d, a, b, c, M[3], S42, 0x8F0CCC92);
+        II(c, d, a, b, M[10], S43, 0xFFEFF47D);
+        II(b, c, d, a, M[1], S44, 0x85845DD1);
+        II(a, b, c, d, M[8], S41, 0x6FA87E4F);
+        II(d, a, b, c, M[15], S42, 0xFE2CE6E0);
+        II(c, d, a, b, M[6], S43, 0xA3014314);
+        II(b, c, d, a, M[13], S44, 0x4E0811A1);
+        II(a, b, c, d, M[4], S41, 0xF7537E82);
+        II(d, a, b, c, M[11], S42, 0xBD3AF235);
+        II(c, d, a, b, M[2], S43, 0x2AD7D2BB);
+        II(b, c, d, a, M[9], S44, 0xEB86D391);
+
+        // Sumar los resultados a los buffers iniciales
+        a += AA; b += BB; c += CC; d += DD;
     }
     
-    unsigned long long total_numbers_to_search = 0;
-    if (h_end_number >= h_start_number) {
-        total_numbers_to_search = h_end_number - h_start_number + 1;
+    // Almacenar el digest final en el array de salida
+    uint32_to_bytes(a, &digest[0]);
+    uint32_to_bytes(b, &digest[4]);
+    uint32_to_bytes(c, &digest[8]);
+    uint32_to_bytes(d, &digest[12]);
+}
+
+// --- Convierte unsigned long long a string en device ---
+__device__ void ulong_to_str(unsigned long long n, char* str, int& len) {
+    len = 0;
+    if (n == 0) {
+        str[len++] = '0';
+        str[len]   = '\0';
+        return;
+    }
+    char tmp[MAX_ULL_STR];
+    int  i = 0;
+    unsigned long long temp_n = n; 
+    while (temp_n > 0 && i < MAX_ULL_STR -1 ) { // Asegurar que no se desborde tmp
+        tmp[i++] = char('0' + (temp_n % 10));
+        temp_n /= 10;
+    }
+    // Invertir el string
+    while (i > 0 && len < MAX_ULL_STR -1) { // Asegurar que no se desborde str
+        str[len++] = tmp[--i];
+    }
+    str[len] = '\0'; 
+}
+
+// --- Estructura de resultados en GPU ---
+struct GpuResult {
+    unsigned long long found_nonce;
+    unsigned char      block_hash[MD5_DIGEST_LENGTH];
+    int                solution_found;
+};
+
+// --- Kernel de minería ---
+__global__ void mineKernel(
+    const char* prefix,      int prefix_len,
+    const char* suffix,      int suffix_len,
+    // Eliminado: char                     end_char,
+    unsigned long long       start_nonce,
+    unsigned long long       end_nonce,
+    const unsigned char* target_prefix,
+    int                      target_len,
+    GpuResult* res_d
+) {
+    unsigned long long idx   = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned long long nonce = start_nonce + idx;
+
+    // Primer punto de depuración: solo el primer hilo del primer bloque
+    // Esto verifica que el kernel se lanza y los argumentos iniciales son correctos.
+    if (threadIdx.x == 0 && blockIdx.x == 0 && nonce == start_nonce) { 
+        printf("DEBUG GPU: Kernel alcanzado por Nonce %llu\n", nonce); 
     }
 
-    if (total_numbers_to_search == 0) {
-        json result_json;
-        result_json["status"] = "no_solution_found";
-        result_json["reason"] = "Rango de nonce vacío.";
-        std::cout << result_json.dump() << std::endl;
-        return 0;
+    if (nonce > end_nonce) return;
+    
+    // Si otro hilo ya encontró una solución, este hilo puede terminar temprano.
+    if (atomicAdd(&res_d->solution_found, 0) > 0) return; 
+
+    char buffer[MAX_JSON_LEN]; 
+    int  pos = 0;
+
+    // Copiar la parte del JSON antes del nonce (incluye "nonce":)
+    if (pos + prefix_len >= MAX_JSON_LEN) return; // Reintroducidas las validaciones
+    for (int i = 0; i < prefix_len; ++i) buffer[pos++] = prefix[i];
+
+    // Convertir y copiar el nonce como string
+    char nstr[MAX_ULL_STR];
+    int  nlen;
+    ulong_to_str(nonce, nstr, nlen);
+    if (pos + nlen >= MAX_JSON_LEN) return; // Reintroducidas las validaciones
+    for (int i = 0; i < nlen; ++i) buffer[pos++] = nstr[i];
+
+    // Copiar la parte del JSON después del nonce (solo el '}' final)
+    if (pos + suffix_len >= MAX_JSON_LEN) return; // Reintroducidas las validaciones
+    for (int i = 0; i < suffix_len; ++i) buffer[pos++] = suffix[i];
+    // No se necesita end_char, ya está incluido en suffix_len si es solo '}'
+
+    // Validación final del tamaño
+    if (pos >= MAX_JSON_LEN) {
+        return; 
     }
 
-    unsigned char h_final_hash[16];
-    char h_final_number_string[MAX_NUMBER_STR_LEN];
-    bool found_solution = false;
-    double elapsed_time_ms = 0.0;
-
-    fprintf(stderr, "Iniciando minado para hash previo: '%s', dificultad: '%s'\n", prev_hash_str.c_str(), difficulty_prefix_str.c_str());
-    fprintf(stderr, "Rango de nonce: desde %llu hasta %llu\n", h_start_number, h_end_number);
-    fprintf(stderr, "Longitud del prefijo a comparar (en bytes): %d\n", target_prefix_len);
-    fprintf(stderr, "Espacio de búsqueda total en este rango: %llu nonces\n", total_numbers_to_search);
-
-    // --- Lógica de selección CPU/GPU ---
-    int device_count = 0;
-#ifdef __CUDACC__
-    cudaGetDeviceCount(&device_count);
-    if (device_count > 0) {
-        fprintf(stderr, "Dispositivo CUDA encontrado. Minando con GPU...\n");
-        // Seleccionar el primer dispositivo CUDA. En una aplicación real, se podría elegir.
-        CHECK_CUDA_ERROR(cudaSetDevice(0)); 
-        found_solution = md5_prefix_cracker_gpu_wrapper(
-            h_block_base_string, block_base_string_len,
-            h_target_prefix_bytes, target_prefix_len,
-            h_final_hash, h_final_number_string,
-            h_start_number, h_end_number,
-            elapsed_time_ms
-        );
-    } else {
-        fprintf(stderr, "No se encontraron dispositivos CUDA. Minando con CPU...\n");
-        auto start_time = std::chrono::high_resolution_clock::now();
-        found_solution = md5_prefix_cracker_cpu_wrapper(
-            h_block_base_string, block_base_string_len,
-            h_target_prefix_bytes, target_prefix_len,
-            h_final_hash, h_final_number_string,
-            h_start_number, h_end_number
-        );
-        auto end_time = std::chrono::high_resolution_clock::now();
-        elapsed_time_ms = std::chrono::duration<double, std::milli>(end_time - start_time).count();
+    // Segundo punto de depuración: muestra la cadena JSON completa para los primeros nonces
+    // Limita la salida para que no sature la consola si el rango es grande
+    if (threadIdx.x == 0 && blockIdx.x == 0 && nonce < 100) { // Imprimir solo los primeros 100 nonces
+        printf("GPU (Nonce %llu) Input (len %d): %.*s\n", nonce, pos, pos, buffer);
     }
-#else // Not compiling with __CUDACC__ (e.g., with g++)
-    fprintf(stderr, "Compilado sin soporte CUDA. Minando con CPU...\n");
-    auto start_time = std::chrono::high_resolution_clock::now();
-    found_solution = md5_prefix_cracker_cpu_wrapper(
-        h_block_base_string, block_base_string_len,
-        h_target_prefix_bytes, target_prefix_len,
-        h_final_hash, h_final_number_string,
-        h_start_number, h_end_number
-    );
-    auto end_time = std::chrono::high_resolution_clock::now();
-    elapsed_time_ms = std::chrono::duration<double, std::milli>(end_time - start_time).count();
-#endif
 
+    unsigned char hash[MD5_DIGEST_LENGTH];
+    md5_cuda_device(reinterpret_cast<const unsigned char*>(buffer), pos, hash);
 
-    json result_json;
+    bool ok = true;
+    for (int i = 0; i < target_len; ++i) {
+        if (hash[i] != target_prefix[i]) { ok = false; break; }
+    }
+    if (!ok) return;
 
-    if (found_solution) {
-        char final_hash_hex_str[33];
-        for (int i = 0; i < 16; ++i) {
-            sprintf(&final_hash_hex_str[i*2], "%02x", (unsigned char)h_final_hash[i]);
+    unsigned long long prev_nonce_in_result = atomicCAS(&res_d->found_nonce, ULLONG_MAX, nonce);
+    if (prev_nonce_in_result == ULLONG_MAX) { 
+        atomicExch(&res_d->solution_found, 1); 
+        for (int i = 0; i < MD5_DIGEST_LENGTH; ++i) {
+            res_d->block_hash[i] = hash[i];
         }
-        final_hash_hex_str[32] = '\0';
-
-        result_json["status"] = "solution_found";
-        result_json["nonce_found"] = std::stoull(h_final_number_string);
-        result_json["block_hash_result"] = std::string(final_hash_hex_str);
-        result_json["elapsed_time_ms"] = elapsed_time_ms;
-
-        fprintf(stderr, "\n--- SOLUCIÓN ENCONTRADA ---\n");
-        fprintf(stderr, "Nonce: %s\n", h_final_number_string);
-        fprintf(stderr, "Hash MD5 resultante: %s\n", final_hash_hex_str);
-        fprintf(stderr, "Tiempo de ejecución: %.2f ms\n", elapsed_time_ms);
-
-    } else {
-        result_json["status"] = "no_solution_found";
-        result_json["elapsed_time_ms"] = elapsed_time_ms;
-        result_json["reason"] = "No se encontró un nonce en el rango especificado que cumpla con la dificultad.";
-        fprintf(stderr, "\n--- No se encontró una solución en el rango [%llu - %llu] ---\n", h_start_number, h_end_number);
-        fprintf(stderr, "Tiempo de ejecución: %.2f ms\n", elapsed_time_ms);
     }
+}
 
-    std::cout << result_json.dump() << std::endl;
+// --- Funciones de Ayuda para el Host (CPU) ---
+void log_host(const std::string& msg) {
+    std::cerr << "[LOG] " << msg << std::endl;
+}
 
-    return 0;
+unsigned long long parse_ull(const char* s, const std::string& name) {
+    try {
+        return std::stoull(s);
+    } catch (const std::out_of_range& e) {
+        log_host("Error parseando " + name + ": El valor \"" + s + "\" está fuera del rango de unsigned long long. Detalle: " + e.what());
+        std::exit(1);
+    } catch (const std::invalid_argument& e) {
+        log_host("Error parseando " + name + ": El valor \"" + s + "\" no es un número válido. Detalle: " + e.what());
+        std::exit(1);
+    } catch (...) {
+        log_host("Error desconocido parseando " + name + ": \"" + s + "\"");
+        std::exit(1);
+    }
+}
+
+json load_json(const std::string& path) {
+    std::ifstream in(path);
+    if (!in) {
+        log_host("Error: No se pudo abrir el archivo JSON: " + path);
+        std::exit(1);
+    }
+    std::stringstream ss;
+    ss << in.rdbuf();
+    try {
+        return json::parse(ss.str());
+    } catch (const json::parse_error& e) {
+        log_host("Error de parseo JSON en '" + path + "': " + std::string(e.what()));
+        std::exit(1);
+    }
+}
+
+std::string extract_diff(const json& j) {
+    if (j.count("configuracion") && j["configuracion"].count("dificultad")) {
+        if (j["configuracion"]["dificultad"].is_string()) {
+            return j["configuracion"]["dificultad"].get<std::string>();
+        } else {
+            log_host("Error: El campo 'dificultad' dentro de 'configuracion' no es una cadena.");
+            std::exit(1);
+        }
+    }
+    if (j.count("dificultad")) {
+        if (j["dificultad"].is_string()) {
+            return j["dificultad"].get<std::string>();
+        } else {
+            log_host("Error: El campo 'dificultad' no es una cadena.");
+            std::exit(1);
+        }
+    }
+    log_host("Error: Campo 'dificultad' no encontrado en el JSON. Asegúrate de que exista en 'configuracion' o directamente en la raíz.");
+    std::exit(1);
+}
+
+int hex2bytes(const std::string& hex, unsigned char* out) {
+    if (hex.length() % 2 != 0) {
+        log_host("Error: La cadena hexadecimal de dificultad tiene longitud impar (" + std::to_string(hex.length()) + "). Debe ser par.");
+        std::exit(1);
+    }
+    int bl = (int)hex.size()/2;
+    for (int i = 0; i < bl; ++i) {
+        try {
+            out[i] = (unsigned char)std::stoi(hex.substr(2*i,2), nullptr, 16);
+        } catch (const std::exception& e) {
+            log_host("Error al convertir hex a bytes en '" + hex.substr(2*i,2) + "': " + e.what());
+            std::exit(1);
+        }
+    }
+    return bl;
+}
+
+// --- Función Principal (Main) del Host ---
+int main(int argc, char** argv) {
+    std::cerr.sync_with_stdio(true);
+    std::cerr << std::unitbuf; 
+
+    if (argc != 4) {
+        log_host("Uso: MineroMD5CUDA <json_file> <start_nonce> <end_nonce>");
+        return 1;
+    }
+    
+    int dev;            
+    cudaDeviceProp prop; 
+
+    try {
+        log_host("Inicializando ejecución CUDA...");
+
+        CUDA_CHECK(cudaGetDevice(&dev));
+        CUDA_CHECK(cudaGetDeviceProperties(&prop, dev));
+        log_host(std::string("GPU: ") + prop.name);
+
+        json jb = load_json(argv[1]);
+        std::string diff = extract_diff(jb);
+        log_host("Dificultad: " + diff);
+
+        unsigned char target[MD5_DIGEST_LENGTH];
+        int           tlen = hex2bytes(diff, target);
+
+        if (jb.count("nonce")) { 
+            jb.erase("nonce");
+        }
+
+        // AHORA: Aseguramos que la salida JSON sea lo más compacta posible.
+        std::string compact_json_base = jb.dump(); // Sin espacios ni formato indentado
+
+        std::string prefix_str; // Contendrá todo ANTES del valor del nonce, incluyendo "nonce":
+        std::string suffix_str; // Contendrá todo DESPUÉS del valor del nonce (ej: el '}' final)
+        
+        size_t last_brace_pos = compact_json_base.find_last_of('}');
+
+        if (last_brace_pos == std::string::npos) {
+            log_host("Error: JSON base no tiene '}'.");
+            return 1;
+        }
+
+        // Construir prefix_str: todo hasta antes del último '}', y luego agregar "nonce":
+        prefix_str = compact_json_base.substr(0, last_brace_pos);
+        if (prefix_str.length() > 1) { // Si no es solo "{"
+            prefix_str += ",\"nonce\":"; // Agrega coma si ya hay otros campos
+        } else { // Si es solo "{" o "{}" (después de borrar nonce si existía)
+            prefix_str += "\"nonce\":"; // No agrega coma si es el primer campo
+        }
+        
+        // Construir suffix_str: solo el '}' final
+        suffix_str = compact_json_base.substr(last_brace_pos); // Esto será solo "}"
+
+        // end_char ya no es necesario
+        // char end_char = '}'; // Eliminado
+
+
+        auto start_nonce = parse_ull(argv[2], "start_nonce");
+        auto end_nonce   = parse_ull(argv[3], "end_nonce");
+        if (start_nonce > end_nonce) {
+            log_host("Error: Rango inválido. 'start_nonce' debe ser menor o igual a 'end_nonce'.");
+            return 1;
+        }
+
+        char             *d_pre, *d_suf;
+        unsigned char    *d_tar;
+        GpuResult        *d_res;
+
+        CUDA_CHECK(cudaMalloc(&d_pre, prefix_str.size()+1));
+        CUDA_CHECK(cudaMalloc(&d_suf, suffix_str.size()+1));
+        CUDA_CHECK(cudaMalloc(&d_tar, tlen));
+        CUDA_CHECK(cudaMalloc(&d_res, sizeof(GpuResult)));
+
+        CUDA_CHECK(cudaMemcpy(d_pre, prefix_str.c_str(), prefix_str.size()+1, cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(d_suf, suffix_str.c_str(), suffix_str.size()+1, cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(d_tar, target, tlen, cudaMemcpyHostToDevice));
+
+        GpuResult init_res{ ULLONG_MAX, {0}, 0 }; 
+        CUDA_CHECK(cudaMemcpy(d_res, &init_res, sizeof(init_res), cudaMemcpyHostToDevice)); 
+
+        unsigned long long total_nonces_to_check = end_nonce - start_nonce + 1;
+        int                threads_per_block = 256;
+        int                num_blocks  = static_cast<int>((total_nonces_to_check + threads_per_block - 1) / threads_per_block);
+        
+        if (num_blocks > prop.maxGridSize[0]) {
+            log_host("Advertencia: El número de bloques calculado (" + std::to_string(num_blocks) + 
+                     ") excede el máximo de la GPU (" + std::to_string(prop.maxGridSize[0]) + "). Limitando bloques.");
+            num_blocks = prop.maxGridSize[0];
+        }
+
+        log_host("Lanzando kernel con " + std::to_string(num_blocks) + " bloques de " + std::to_string(threads_per_block) + " hilos.");
+
+        auto t0 = std::chrono::high_resolution_clock::now();
+        mineKernel<<<num_blocks, threads_per_block>>>(
+            d_pre, (int)prefix_str.size(),
+            d_suf, (int)suffix_str.size(),
+            // Eliminado: end_char,
+            start_nonce, end_nonce,
+            d_tar, tlen,
+            d_res
+        );
+        CUDA_CHECK(cudaDeviceSynchronize()); 
+        auto t1 = std::chrono::high_resolution_clock::now();
+
+        GpuResult final_output;
+        CUDA_CHECK(cudaMemcpy(&final_output, d_res, sizeof(final_output), cudaMemcpyDeviceToHost));
+        
+        cudaFree(d_pre); 
+        cudaFree(d_suf); 
+        cudaFree(d_tar); 
+        cudaFree(d_res);
+
+        double elapsed_ms = std::chrono::duration<double,std::milli>(t1 - t0).count();
+        json   result_json_output;
+        result_json_output["elapsed_time_ms"] = int64_t(elapsed_ms);
+
+        if (final_output.solution_found) {
+            char hash_str[33]; 
+            for (int i = 0; i < MD5_DIGEST_LENGTH; ++i) {
+                sprintf(hash_str + 2*i, "%02x", final_output.block_hash[i]);
+            }
+            hash_str[32] = '\0'; 
+
+            result_json_output["status"]             = "solution_found";
+            result_json_output["nonce_found"]        = final_output.found_nonce;
+            result_json_output["block_hash_result"]  = std::string(hash_str);
+            log_host("¡SOLUCIÓN ENCONTRADA! Nonce: " + std::to_string(final_output.found_nonce) + ", Hash: " + std::string(hash_str));
+        } else {
+            result_json_output["status"] = "no_solution_found";
+            result_json_output["reason"] = "No se encontró un nonce válido en el rango especificado.";
+            log_host("No se encontró solución en el rango especificado.");
+        }
+
+        std::cout << result_json_output.dump() << std::endl;
+        return 0;
+
+    } catch (const std::exception& e) {
+        log_host(std::string("Error fatal inesperado: ") + e.what());
+        return 1;
+    }
 }
