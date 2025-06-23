@@ -4,11 +4,15 @@ import time
 import subprocess
 import json
 import tempfile
+from Usuario import UsuarioBlockchain
+import sys
 
 COORDINADOR_URL = "http://host.docker.internal:5000"
 MINERO_EJECUTABLE = "./MineroMD5CPU"
 START_NONCE = 0
 END_NONCE = 1000000
+
+usuario = None
 
 def obtener_tarea():
     try:
@@ -29,6 +33,7 @@ def enviar_resultado_al_coordinador(tarea_original, resultado_minado):
             bloque_final = tarea_original.copy()
             bloque_final["nonce"] = resultado_minado.get("nonce_found")
             bloque_final["hash"] = resultado_minado.get("block_hash_result")
+            bloque_final["direccion"] = usuario.direccion
         else:
             print(f"[WORKER] No se envía bloque al Coordinador porque el minero no encontró solución o hubo un error: {resultado_minado.get('status')}")
             return False
@@ -111,7 +116,7 @@ def bucle_principal_worker():
     print("[WORKER] Worker de minería iniciado. Conectando al Coordinador en", COORDINADOR_URL)
     while True:
         tarea = obtener_tarea()
-        if tarea and all(k in tarea for k in ["prev_hash", "transacciones", "index", "configuracion"]) and "dificultad" in tarea["configuracion"]:
+        if tarea and all(k in tarea for k in ["prev_hash", "transacciones", "index", "dificultad"]):
             print(f"[WORKER] Tarea recibida {tarea}).")
 
             resultado_minero = ejecutar_minero_cuda(tarea)
@@ -132,5 +137,14 @@ def bucle_principal_worker():
             print("[WORKER] Sin tareas disponibles del Coordinador. Esperando...")
             time.sleep(50)
 
-if __name__ == "__main__":
+def main():
+    if len(sys.argv) < 2:
+        print("Se debe dar un nombre para el worker.")
+        sys.exit(1)
+    global usuario
+    usuario = UsuarioBlockchain(nombre= sys.argv[1])
     bucle_principal_worker()
+
+if __name__ == "__main__":
+    main()
+
