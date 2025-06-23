@@ -7,6 +7,7 @@
 #include <limits.h> // Para ULLONG_MAX
 #include <cstring>  // Para memcpy en el host, aunque no se usa directamente ahora
 #include <cstdio>   // Para sprintf
+#include <algorithm> // Para std::min
 
 // Incluisiones de CUDA
 #include <cuda_runtime.h>
@@ -42,6 +43,8 @@ typedef unsigned int uint32;
 #define G(x, y, z) (((x) & (z)) | ((y) & (~z)))
 #define H(x, y, z) ((x) ^ (y) ^ (z))
 #define I(x, y, z) ((y) ^ ((x) | (~z)))
+
+
 
 // Rotación izquierda
 #define ROTATE_LEFT(x, n) (((x) << (n)) | ((x) >> (32 - (n))))
@@ -124,6 +127,8 @@ __device__ void md5_cuda_device(const unsigned char* data, size_t len, unsigned 
     // El 63 es para redondear al siguiente múltiplo de 64
     size_t padded_len = (len + 1 + 8 + 63) / 64 * 64; 
     
+    // Usar puntero dinámico o __shared__ si MAX_JSON_LEN + 64 es demasiado grande para la pila de hilo.
+    // Para simplificar, asumimos que stack suficientemente grande o que el compilador lo optimiza.
     unsigned char padded_data[MAX_JSON_LEN + 64]; 
     
     // Copiar los datos originales
@@ -263,7 +268,6 @@ struct GpuResult {
 __global__ void mineKernel(
     const char* prefix,      int prefix_len,
     const char* suffix,      int suffix_len,
-    // Eliminado: char                     end_char,
     unsigned long long       start_nonce,
     unsigned long long       end_nonce,
     const unsigned char* target_prefix,
@@ -288,20 +292,19 @@ __global__ void mineKernel(
     int  pos = 0;
 
     // Copiar la parte del JSON antes del nonce (incluye "nonce":)
-    if (pos + prefix_len >= MAX_JSON_LEN) return; // Reintroducidas las validaciones
+    if (pos + prefix_len >= MAX_JSON_LEN) return; 
     for (int i = 0; i < prefix_len; ++i) buffer[pos++] = prefix[i];
 
     // Convertir y copiar el nonce como string
     char nstr[MAX_ULL_STR];
     int  nlen;
     ulong_to_str(nonce, nstr, nlen);
-    if (pos + nlen >= MAX_JSON_LEN) return; // Reintroducidas las validaciones
+    if (pos + nlen >= MAX_JSON_LEN) return; 
     for (int i = 0; i < nlen; ++i) buffer[pos++] = nstr[i];
 
-    // Copiar la parte del JSON después del nonce (solo el '}' final)
-    if (pos + suffix_len >= MAX_JSON_LEN) return; // Reintroducidas las validaciones
+    // Copiar la parte del JSON después del nonce (el resto de la cadena JSON)
+    if (pos + suffix_len >= MAX_JSON_LEN) return; 
     for (int i = 0; i < suffix_len; ++i) buffer[pos++] = suffix[i];
-    // No se necesita end_char, ya está incluido en suffix_len si es solo '}'
 
     // Validación final del tamaño
     if (pos >= MAX_JSON_LEN) {
@@ -310,7 +313,7 @@ __global__ void mineKernel(
 
     // Segundo punto de depuración: muestra la cadena JSON completa para los primeros nonces
     // Limita la salida para que no sature la consola si el rango es grande
-    if (threadIdx.x == 0 && blockIdx.x == 0 && nonce < 100) { // Imprimir solo los primeros 100 nonces
+    if (threadIdx.x == 0 && blockIdx.x == 0 && nonce < 100) { 
         printf("GPU (Nonce %llu) Input (len %d): %.*s\n", nonce, pos, pos, buffer);
     }
 
@@ -411,6 +414,10 @@ int main(int argc, char** argv) {
     std::cerr.sync_with_stdio(true);
     std::cerr << std::unitbuf; 
 
+    // Declaración de variables para el ámbito completo de main
+    std::string prefix_str; 
+    std::string suffix_str; 
+
     if (argc != 4) {
         log_host("Uso: MineroMD5CUDA <json_file> <start_nonce> <end_nonce>");
         return 1;
@@ -433,38 +440,48 @@ int main(int argc, char** argv) {
         unsigned char target[MD5_DIGEST_LENGTH];
         int           tlen = hex2bytes(diff, target);
 
-        if (jb.count("nonce")) { 
+        // 1. Eliminar el nonce si existe del JSON cargado
+        if (jb.count("nonce")) {
             jb.erase("nonce");
         }
 
-        // AHORA: Aseguramos que la salida JSON sea lo más compacta posible.
-        std::string compact_json_base = jb.dump(); // Sin espacios ni formato indentado
+        // 2. Crear un nuevo JSON con el orden deseado para el hashing
+        // Esto es crucial para que el nonce se inserte en la posición correcta.
+        // Copiamos los campos en el orden que queremos para el hash
+        json ordered_json;
+        if (jb.count("index"))       ordered_json["index"] = jb["index"];
+        ordered_json["nonce"] = 0; // Marcador temporal para el nonce
+        if (jb.count("dificultad"))  ordered_json["dificultad"] = jb["dificultad"];
+        if (jb.count("prev_hash"))   ordered_json["prev_hash"] = jb["prev_hash"];
+        if (jb.count("timestamp"))   ordered_json["timestamp"] = jb["timestamp"];
+        if (jb.count("transacciones")) ordered_json["transacciones"] = jb["transacciones"];
+        // ¡Importante! Si tienes otros campos en tu JSON que no son 'index', 'nonce', 'dificultad',
+        // 'prev_hash', 'timestamp' o 'transacciones', deberás añadirlos aquí en el orden correcto
+        // para que sean parte del hash. Por ejemplo:
+        // if (jb.count("otro_campo")) ordered_json["otro_campo"] = jb["otro_campo"];
 
-        std::string prefix_str; // Contendrá todo ANTES del valor del nonce, incluyendo "nonce":
-        std::string suffix_str; // Contendrá todo DESPUÉS del valor del nonce (ej: el '}' final)
-        
-        size_t last_brace_pos = compact_json_base.find_last_of('}');
+        // Ahora, serializamos este JSON ordenado a una cadena compacta
+        std::string compact_json_with_placeholder = ordered_json.dump();
 
-        if (last_brace_pos == std::string::npos) {
-            log_host("Error: JSON base no tiene '}'.");
+        // 3. Encontrar la posición del marcador "nonce":0
+        std::string nonce_placeholder = "\"nonce\":0";
+        size_t nonce_pos_start = compact_json_with_placeholder.find(nonce_placeholder);
+
+        if (nonce_pos_start == std::string::npos) {
+            log_host("Error interno: No se encontró el marcador de nonce en el JSON reconstruido.");
             return 1;
         }
 
-        // Construir prefix_str: todo hasta antes del último '}', y luego agregar "nonce":
-        prefix_str = compact_json_base.substr(0, last_brace_pos);
-        if (prefix_str.length() > 1) { // Si no es solo "{"
-            prefix_str += ",\"nonce\":"; // Agrega coma si ya hay otros campos
-        } else { // Si es solo "{" o "{}" (después de borrar nonce si existía)
-            prefix_str += "\"nonce\":"; // No agrega coma si es el primer campo
-        }
+        // 4. Construir prefix_str y suffix_str
+        // prefix_str será todo ANTES del "0" del nonce (incluye "nonce":)
+        prefix_str = compact_json_with_placeholder.substr(0, nonce_pos_start + std::string("\"nonce\":").length());
         
-        // Construir suffix_str: solo el '}' final
-        suffix_str = compact_json_base.substr(last_brace_pos); // Esto será solo "}"
+        // suffix_str será todo DESPUÉS del "0" del nonce, incluyendo el '}' final
+        suffix_str = compact_json_with_placeholder.substr(nonce_pos_start + nonce_placeholder.length());
 
-        // end_char ya no es necesario
-        // char end_char = '}'; // Eliminado
-
-
+        log_host("Prefix String para GPU (muestra): " + prefix_str.substr(0, std::min(prefix_str.length(), static_cast<size_t>(200))));
+        log_host("Suffix String para GPU (muestra): " + suffix_str.substr(0, std::min(suffix_str.length(), static_cast<size_t>(200))));
+        
         auto start_nonce = parse_ull(argv[2], "start_nonce");
         auto end_nonce   = parse_ull(argv[3], "end_nonce");
         if (start_nonce > end_nonce) {
@@ -504,7 +521,6 @@ int main(int argc, char** argv) {
         mineKernel<<<num_blocks, threads_per_block>>>(
             d_pre, (int)prefix_str.size(),
             d_suf, (int)suffix_str.size(),
-            // Eliminado: end_char,
             start_nonce, end_nonce,
             d_tar, tlen,
             d_res
