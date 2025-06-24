@@ -7,13 +7,15 @@ import requests
 import time
 
 class UsuarioBlockchain:
-    def __init__(self, nombre=None):
+    def __init__(self, nombre=None, coordinador_url="http://coordinador:5000"):
         if nombre:
             self._generar_wallet_personalizada(nombre)
         else:
             self.clave_privada = ec.generate_private_key(ec.SECP256K1())
             self.clave_publica = self.clave_privada.public_key()
             self.direccion = self._generar_direccion()
+        if coordinador_url:
+            self.coordinador_url = coordinador_url
 
     def _generar_direccion(self):
         pub_bytes = self.clave_publica.public_bytes(
@@ -57,11 +59,12 @@ class UsuarioBlockchain:
             encryption_algorithm=serialization.NoEncryption()
         ).decode()
     
-    def registar(self, url="http://localhost:5000/registro"):
+    def registar(self):
         data = {
             "clave_publica": self.exportar_clave_publica()
         }
         try:
+            url = f"{self.coordinador_url}/registro"
             response = requests.post(url, json=data)
             if response.status_code == 201:
                 print("[✅] Registro exitoso:", response.json())
@@ -70,7 +73,7 @@ class UsuarioBlockchain:
         except Exception as e:
             print("[💥] Excepción durante el registro:", e)
     
-    def enviar_transaccion(self, destino, monto, url_coordinador="http://localhost:5000/transaccion"):
+    def enviar_transaccion(self, destino, monto):
         transaccion = {
             "de": self.direccion,
             "para": destino,
@@ -85,8 +88,8 @@ class UsuarioBlockchain:
             "clave_publica": clave_publica,
             "firma": firma
         }
-
-        response = requests.post(url_coordinador, json=datos)
+        url = f"{self.coordinador_url}/transaccion"
+        response = requests.post(url, json=datos)
 
         if response.status_code == 201:
             print("[✅] Transacción enviada con éxito:", response.json())

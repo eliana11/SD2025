@@ -1,7 +1,7 @@
-from Usuario import UsuarioBlockchain
-
-usuario1 = UsuarioBlockchain(nombre = "001")
-usuario2 = UsuarioBlockchain(nombre = "002")
+from worker.Usuario import UsuarioBlockchain
+import requests
+usuario1 = UsuarioBlockchain(nombre = "001", coordinador_url="http://localhost:5000")
+usuario2 = UsuarioBlockchain(nombre = "002", coordinador_url="http://localhost:5000")
 
 usuario1.registar()
 usuario2.registar()

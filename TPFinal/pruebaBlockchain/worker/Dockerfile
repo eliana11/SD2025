@@ -29,11 +29,12 @@ COPY . .
 # Instalar dependencias de Python requeridas
 RUN pip3 install --no-cache-dir \
     cryptography \
-    requests
+    requests \
+    ntplib
 
 # Compilar el minero C++ de forma estática
 RUN g++ MineroCPU.cpp -o MineroMD5CPU -static -static-libgcc -static-libstdc++ \
     -I/usr/local/include -L/usr/local/lib -lcrypto
 
 # Comando de entrada: ejecuta el worker con argumento
-CMD ["python3", "worker.py", "101"]
+CMD ["python3", "worker.py", "101", "http://host.docker.internal:5000"]
