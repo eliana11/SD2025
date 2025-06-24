@@ -20,79 +20,46 @@ usuario = None
 configuracion = None
 hora_ntp_cache = None
 momento_local_cache = None
-duracion_cache_segundos = 60  # Cachear durante 60 segundos
-
-def obtener_hora_ntp():
-    global hora_ntp_cache, momento_local_cache
-    ahora_local = time.time()
-
-    # Usar caché si no venció
-    if hora_ntp_cache and momento_local_cache:
-        if ahora_local - momento_local_cache < duracion_cache_segundos:
-            diferencia = ahora_local - momento_local_cache
-            return hora_ntp_cache + timedelta(seconds=diferencia)
-    try:
-        client = ntplib.NTPClient()
-        ntp_server = configuracion.get("ntp_server", "ar.pool.ntp.org")
-        response = client.request(ntp_server, version=3)
-                
-        # Actualizar caché
-        hora_ntp_cache = datetime.fromtimestamp(response.tx_time)
-        momento_local_cache = ahora_local
-        print(f"[NTP] Hora sincronizada con {ntp_server}")
-
-        return hora_ntp_cache
     
+def obtener_estado_coordinador():
+    try:
+        resp = requests.get(f"{COORDINADOR_URL}/estado")
+        if resp.status_code == 200:
+            return resp.json()
+        else:
+            print(f"[WORKER] Error al obtener estado del coordinador: {resp.status_code}, {resp.text}")
+            return None
     except Exception as e:
-        print(f"[NTP] Error al obtener hora NTP: {e}")
-        return datetime.now()  # Fallback a la hora local si falla NTP
+        print(f"[WORKER] Excepción al consultar /estado: {e}")
+        return None
     
 def esperar_y_obtener_estado(objetivo="ventana_tareas"):
     if not configuracion:
-        print("[SYNC] No hay configuración, no puedo sincronizar.")
+        print("[SYNC] No hay configuración. Esperando antes de reintentar...")
         time.sleep(5)
         return "desconocido"
 
+    print(f"[SYNC] Esperando cambio a '{objetivo}'...")
+
     while True:
-        tiempo_inicio = datetime.strptime(configuracion["time"], "%Y-%m-%d %H:%M:%S").timestamp()
-        tiempo_actual = obtener_hora_ntp().timestamp()
+        estado = obtener_estado_coordinador()
+        if not estado:
+            print("[SYNC] No se pudo obtener estado del coordinador. Reintentando en 5s...")
+            time.sleep(5)
+            continue
 
-        duracion_ronda = int(configuracion["tiempo_ronda_seg"])
-        duracion_resultado = int(configuracion["tiempo_resultados_seg"])
-        duracion_espera = int(configuracion["tiempo_espera_seg"])
-        ciclo = duracion_ronda + duracion_resultado + duracion_espera
+        estado_actual = estado.get("estado")
+        tiempo_restante = estado.get("tiempo_restante", 0)
 
-        transcurrido = tiempo_actual - tiempo_inicio
-        momento_en_ciclo = transcurrido % ciclo
+        if estado_actual == objetivo:
+            print(f"[SYNC] Estado alcanzado: '{objetivo}' ✅")
+            return objetivo
 
-        if objetivo == "ventana_tareas":
-            if momento_en_ciclo < duracion_ronda - MARGEN_SINCRONIZACION:
-                return "ventana_tareas"
-            falta = ciclo - momento_en_ciclo + 0.1
+        print(f"[SYNC] Estado actual: '{estado_actual}'. Esperando a '{objetivo}' ({tiempo_restante:.2f}s restantes)...")
+        
+        # Esperar de forma más granular (máx s)
+        time.sleep(min(5, tiempo_restante))
 
-        elif objetivo == "ventana_resultados":
-            inicio = duracion_ronda
-            fin = duracion_ronda + duracion_resultado
-            if inicio <= momento_en_ciclo < fin - MARGEN_SINCRONIZACION:
-                return "ventana_resultados"
-            elif momento_en_ciclo < inicio:
-                falta = inicio - momento_en_ciclo + 0.1
-            else:
-                falta = ciclo - momento_en_ciclo + inicio + 0.1
-
-        elif objetivo == "ventana_espera":
-            inicio = duracion_ronda + duracion_resultado
-            if momento_en_ciclo >= inicio - MARGEN_SINCRONIZACION:
-                return "ventana_espera"
-            else:
-                falta = inicio - momento_en_ciclo + 0.1
-
-        else:
-            print("[SYNC] Objetivo inválido:", objetivo)
-            return "desconocido"
-
-        print(f"[SYNC] Esperando {math.ceil(falta)}s hasta próxima {objetivo}...")
-        time.sleep(math.ceil(falta))
 
 def obtener_configuracion():
     try:
@@ -129,11 +96,7 @@ def enviar_resultado_al_coordinador(tarea_original, resultado_minado):
             print(f"[WORKER] No se envía bloque. Estado: {resultado_minado.get('status')}")
             return False
 
-        # Esperar hasta ventana de resultados
-        estado = esperar_y_obtener_estado("ventana_resultados")
-        if estado != "ventana_resultados":
-            print("[WORKER] Esperando apertura de ventana de resultados...")
-            esperar_y_obtener_estado("ventana_resultados")
+        esperar_y_obtener_estado("ventana_resultados")
 
         bloque_final = tarea_original.copy()
         bloque_final["nonce"] = resultado_minado.get("nonce_found")
@@ -259,4 +222,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

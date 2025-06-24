@@ -41,9 +41,9 @@ CONFIG = {
     "alg": "md5",                                   # Algoritmo de hash utilizado
     "coins": 21000000,                              # Cantidad total de monedas en la blockchain
     "dificultad_inicial": "00",                     # Dificultad inicial de la minería
-    "tiempo_ronda_seg": 60,                         # Ventana para obtener tareas de minería
-    "tiempo_resultados_seg": 25,                    # Ventana para recibir resultados de mineria
-    "tiempo_espera_seg": 10,                        # Tiempo de espera entre rondas
+    "tiempo_ronda_seg": 45,                         # Ventana para obtener tareas de minería
+    "tiempo_resultados_seg": 15,                    # Ventana para recibir resultados de mineria
+    "tiempo_espera_seg": 5,                        # Tiempo de espera entre rondas
     "max_intentos_mineria": 3,                      # Máximo de veces que se reintenta una tarea si no se obtiene resultado
     "premio_minado": 500,                           # Recompensa por minar un bloque
     "ntp_server": "ar.pool.ntp.org"                 # Servidor NTP utilizado para sincronizar la hora
@@ -111,6 +111,28 @@ def obtener_hora_ntp():
         return datetime.now()  # Fallback a la hora local
 
 CONFIG["time"] = obtener_hora_ntp().strftime("%Y-%m-%d %H:%M:%S")
+
+# Endpoint para obtener estado del coordinador
+@app.route('/estado', methods=['GET'])
+def obtener_estado():
+    estado = estado_actual()
+    tiempo_genesis_str = CONFIG.get("time")
+    tiempo_genesis = datetime.strptime(tiempo_genesis_str, "%Y-%m-%d %H:%M:%S").timestamp()
+    ahora = obtener_hora_ntp().timestamp()
+    desde_genesis = ahora - tiempo_genesis
+    en_ciclo = desde_genesis % CICLO_TOTAL
+
+    t_ronda = CONFIG.get("tiempo_ronda_seg")
+    t_resultados = CONFIG.get("tiempo_resultados_seg")
+    t_espera = CONFIG.get("tiempo_espera_seg")
+
+    return jsonify({
+        "estado": estado,
+        "tiempo_restante": max(0, round(CICLO_TOTAL - en_ciclo, 2)),
+        "tiempo_ronda": t_ronda,
+        "tiempo_resultados": t_resultados,
+        "tiempo_espera": t_espera
+    }), 200
 
 @app.route('/registro', methods=['POST'])
 def registrar_usuario():
@@ -253,7 +275,7 @@ def recibir_resultado_mineria():
         print("Hash inválido. Calculado:", hash_calculado, "Recibido:", bloque["hash"])
         return jsonify({"error": "Hash inválido"}), 400
 
-    dificultad = configuracion_blockchain["dificultad"]
+    dificultad = redis_client.get("dificultad_actual")
     if not bloque["hash"].startswith("0" * len(dificultad)):
         print("Hash no cumple la dificultad.")
         return jsonify({"error": f"No cumple la dificultad ({dificultad})"}), 400
@@ -467,80 +489,99 @@ def manejar_cambio_a_espera():
     global tarea_mineria_actual_global, primer_bloque_encontrado_global
     global total_workers_en_ronda, soluciones_exitosas_en_ronda
 
-    if not tarea_mineria_actual_global:
-        print("[⚠️] No hay tarea de minería activa en este momento.")
-        return
+    print("\n[⏱️] Cambio detectado a ventana de espera. Procesando estado de minería...")
 
-    bloque_index = tarea_mineria_actual_global["index"]
+    if tarea_mineria_actual_global:
+        bloque_index = tarea_mineria_actual_global["index"]
+        print(f"[🔎] Evaluando estado del bloque {bloque_index}...")
 
-    if primer_bloque_encontrado_global:
-        procesar_bloque_encontrado(primer_bloque_encontrado_global)
-        primer_bloque_encontrado_global = None
-        redis_client.delete(f"tarea_bloque:{bloque_index}")
-        redis_client.delete(f"intentos:{bloque_index}")
-        tarea_mineria_actual_global = None
-    else:
-        # Incrementar intentos y verificar
-        redis_client.incr(f"intentos:{bloque_index}")
-        intentos_str = redis_client.get(f"intentos:{bloque_index}")
-        intentos = int(intentos_str or 0)
-
-        if intentos > configuracion_blockchain["max_intentos_mineria"]:
-            print(f"[🛑] Máximo de intentos alcanzado para bloque {bloque_index}. Se descarta.")
+        if primer_bloque_encontrado_global:
+            print("[✅] Se encontró un bloque válido durante la ronda. Procesando...")
+            procesar_bloque_encontrado(primer_bloque_encontrado_global)
+            primer_bloque_encontrado_global = None
             redis_client.delete(f"tarea_bloque:{bloque_index}")
             redis_client.delete(f"intentos:{bloque_index}")
             tarea_mineria_actual_global = None
         else:
-            print(f"[🔁] Reintentando tarea {bloque_index}. Intento {intentos}")
-            channel.basic_publish(
-                exchange='', routing_key='mining_tasks', body=json.dumps(tarea_mineria_actual_global)
-            )
+            print("[❌] Ningún minero resolvió la tarea. Evaluando reintento...")
+            redis_client.incr(f"intentos:{bloque_index}")
+            intentos_str = redis_client.get(f"intentos:{bloque_index}")
+            intentos = int(intentos_str or 0)
 
+            print(f"[🔁] Intento actual: {intentos}/{CONFIG['max_intentos_mineria']}")
+
+            if intentos > configuracion_blockchain["max_intentos_mineria"]:
+                print(f"[🛑] Máximo de intentos alcanzado para bloque {bloque_index}. Se descarta definitivamente.")
+                redis_client.delete(f"tarea_bloque:{bloque_index}")
+                redis_client.delete(f"intentos:{bloque_index}")
+                tarea_mineria_actual_global = None
+            else:
+                print(f"[📤] Reenviando tarea {bloque_index} a la cola de minería (intento {intentos})...")
+                channel.basic_publish(
+                    exchange='', routing_key='mining_tasks', body=json.dumps(tarea_mineria_actual_global)
+                )
+
+    else:
+        print("[⚠️] No había tarea de minería activa al comenzar esta ventana.")
+
+    print("[⚙️] Ajustando dificultad en función de los resultados...")
     ajustar_dificultad()
 
     if not tarea_mineria_actual_global:
+        print("[🚀] Preparando nueva tarea desde las transacciones pendientes...")
         crear_tarea_desde_pendientes()
+    else:
+        print("[🕒] Tarea aún en curso. No se crea una nueva tarea.")
 
 def crear_tarea_desde_pendientes():
+    print("[📥] Recuperando transacciones pendientes para nuevo bloque...")
     transacciones = []
+
     while redis_client.llen("transacciones_pendientes") > 0:
         firma = redis_client.lpop("transacciones_pendientes")
         if firma:
             t_json = redis_client.get(f"transaccion:{firma}")
             if t_json:
                 transacciones.append(json.loads(t_json))
+                print(f"[➕] Transacción recuperada: {firma}")
 
     if not transacciones:
-        print("[🟡] No hay transacciones pendientes para crear un nuevo bloque.")
+        print("[🟡] No hay transacciones suficientes para crear un nuevo bloque.")
         return
 
+    print(f"[📦] {len(transacciones)} transacciones listas para minar. Creando bloque...")
     crear_nueva_tarea(transacciones)
 
 def crear_nueva_tarea(transacciones=None): 
     global tarea_mineria_actual_global, contador_intentos_mineria_global, tiempo_inicio_mineria_global, primer_bloque_encontrado_global
-    print("[🔧] Preparando nuevo bloque para minar...")
-    
+    print("[🧱] Creando nueva tarea de minería...")
+
     prox_indice = redis_client.llen("blockchain")        
     hora = obtener_hora_ntp().strftime("%Y-%m-%d %H:%M:%S")
+    dificultad_actual = redis_client.get("dificultad_actual")
+
     new_block = {
         "index": prox_indice,
         "transacciones": transacciones,
         "prev_hash": obtener_ultimo_hash(),
-        "nonce": 0, # Placeholder, minero lo llenará
-        "dificultad": redis_client.get("dificultad_actual"),
-        "timestamp": hora # Timestamp de creación de la tarea
+        "nonce": 0,
+        "dificultad": dificultad_actual,
+        "timestamp": hora
     }
 
+    print(f"[🔧] Nueva tarea creada: índice {prox_indice}, dificultad {dificultad_actual}, {len(transacciones)} transacciones.")
+
     redis_client.set("bloque_en_curso", json.dumps(new_block))
-    enviar_a_minar(new_block) # Reutiliza la función existente enviar_a_minar
+    enviar_a_minar(new_block)
     primer_bloque_encontrado_global = None
+    print("[📤] Tarea enviada a la cola de minería.")
     return new_block
 
 def cargar_configuracion_blockchain():
     global configuracion_blockchain, CICLO_TOTAL
     config_json = redis_client.get("configuracion_blockchain")
     print("[⚙️] Cargando configuración de la blockchain desde Redis.")
-    CICLO_TOTAL = configuracion_blockchain["tiempo_ronda_seg"] + configuracion_blockchain["tiempo_resultados_seg"] + configuracion_blockchain["tiempo_espera_seg"]
+    CICLO_TOTAL = CONFIG["tiempo_ronda_seg"] + CONFIG["tiempo_resultados_seg"] + CONFIG["tiempo_espera_seg"]
     configuracion_blockchain = json.loads(config_json)
 
 def crear_configuracion():    
@@ -548,8 +589,8 @@ def crear_configuracion():
     redis_client.set("configuracion_blockchain", json.dumps(config))
     print("[⚙️] Configuración almacenada en Redis.")
     global CICLO_TOTAL
-    redis_client.set("dificultad_actual", config["dificultad_inicial"]) # Inicializar dificultad
-    CICLO_TOTAL = config["tiempo_ronda_seg"] + config["tiempo_resultados_seg"] + config["tiempo_espera_seg"]
+    redis_client.set("dificultad_actual", CONFIG["dificultad_inicial"]) # Inicializar dificultad
+    CICLO_TOTAL = CONFIG["tiempo_ronda_seg"] + CONFIG["tiempo_resultados_seg"] + CONFIG["tiempo_espera_seg"]
     return config
 
 def inicializar_blockchain():
