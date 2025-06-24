@@ -1,0 +1,25 @@
+{
+    "configuracion": {
+        "alg": "md5",
+        "coins": 21000000,
+        "curva": "secp384r1",
+        "dificultad_inicial": "00",
+        "max_intentos_mineria": 3,
+        "premio_minado": 500,
+        "tiempo_resultados_seg": 15,
+        "tiempo_ronda_seg": 120,
+        "time": "2025-06-23 22:33:08"
+    },
+    "dificultad": "000000",
+    "index": 0,
+    "nonce": 0,
+    "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "timestamp": "2025-06-23 22:33:08",
+    "transacciones": [
+        {
+            "de": "0000000000000000000000000000000000000000000000000000000000000000",
+            "monto": 21000000,
+            "para": "CoinBase"
+        }
+    ]
+}

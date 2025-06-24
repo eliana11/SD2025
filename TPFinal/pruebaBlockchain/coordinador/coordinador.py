@@ -28,6 +28,11 @@ print("[INIT] Conectando a Redis...")
 redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
 print("[OK] Conectado a Redis.")
 
+# Crear enum para los estados del coordinador
+class EstadoCoordinador:
+    MINANDO = "minando"
+    RESULTADOS = "resultados"
+
 tarea_mineria_actual_global = None  # Almacena el bloque que se está minando actualmente
 tiempo_inicio_mineria_global = None    # Cuándo comenzó la ronda actual
 contador_intentos_mineria_global = 0        # Cuántos intentos lleva el bloque actual
@@ -36,6 +41,8 @@ timer_resultados_global = None        # Objeto Timer para la ventana de resultad
 mejor_bloque_encontrado_global = None # Variable para almacenar el mejor resultado encontrado
 total_workers_en_ronda = 0
 soluciones_exitosas_en_ronda = 0
+
+CICLO_TOTAL = None
 
 # Lock global para asegurar que solo una ronda se procesa a la vez
 lock_ronda_global = threading.Lock()
@@ -101,7 +108,6 @@ def agregar_transaccion():
         "mensaje": "Transacción recibida y válida",
         "transaccion": transaccion
     }), 201
-
 
 # Endpoint para ver todas las transacciones pendientes (opcional)
 @app.route('/transacciones', methods=['GET'])
@@ -230,6 +236,17 @@ def recibir_resultado_mineria():
             # No es el primer resultado, validar pero no guardar ni recompensar
             print(f"Resultado válido recibido para bloque index {bloque_original_id}, pero no es el primero, no se guarda ni recompensa.")
             return jsonify({"mensaje": "Resultado válido pero bloque ya encontrado por otro minero"}), 200
+
+def estado_actual():
+    """Determina en qué parte del ciclo estamos."""
+    ahora = time.time()
+    desde_genesis = ahora - configuracion_blockchain.get("time")  # Tiempo desde el inicio de la ronda
+    en_ciclo = desde_genesis % CICLO_TOTAL
+
+    if en_ciclo < configuracion_blockchain["tiempo_ronda_seg"]:
+        return 'ventana_tareas'
+    else:
+        return 'ventana_resultados'
 
 def enviar_recompensa(clave_publica):
     config = json.loads(redis_client.get("configuracion_blockchain"))
@@ -482,9 +499,10 @@ def procesar_bloque_encontrado(datos_mejor_bloque):
     return True, {"mensaje": "Bloque agregado correctamente"}
 
 def cargar_configuracion_blockchain():
-    global configuracion_blockchain
+    global configuracion_blockchain, CICLO_TOTAL
     config_json = redis_client.get("configuracion_blockchain")
     print("[⚙️] Cargando configuración de la blockchain desde Redis.")
+    CICLO_TOTAL = configuracion_blockchain.get("tiempo_ronda_seg", 120) + configuracion_blockchain.get("tiempo_resultados_seg", 15)
     configuracion_blockchain = json.loads(config_json)
 
 def crear_configuracion():
@@ -496,13 +514,13 @@ def crear_configuracion():
         "dificultad_inicial": "00",                 # Dificultad inicial de la minería
         "tiempo_ronda_seg": 120,                    # Ventana para obtener tareas de minería
         "tiempo_resultados_seg": 15,                # Ventana para recibir resultados de mineria
-        "cooldown_entre_rondas_seg": 5,             # Tiempo de espera entre rondas
         "max_intentos_mineria": 3,                  # Máximo de veces que se reintenta una tarea si no se obtiene resultado
         "premio_minado": 500,                       # Recompensa por minar un bloque
     }
     redis_client.set("configuracion_blockchain", json.dumps(config))
     print("[⚙️] Configuración almacenada en Redis.")
-    global configuracion_blockchain
+    global configuracion_blockchain, CICLO_TOTAL
+    CICLO_TOTAL = config["tiempo_ronda_seg"] + config["tiempo_resultados_seg"]
     configuracion_blockchain = config
     return config
 
