@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # Número de repeticiones
-N=10
+N=1
 
 # Archivo para guardar los tiempos
-output_file="tiempos_minado000000.txt"
+output_file="tiempos_minado00.txt"
 > "$output_file"  # limpio archivo
 
 for ((i=1; i<=N; i++)); do

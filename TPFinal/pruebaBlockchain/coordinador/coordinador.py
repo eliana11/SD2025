@@ -35,13 +35,13 @@ CICLO_TOTAL = None
 MARGEN_TOLERANCIA = 0.5                # Margen de tolerancia para el ciclo de tiempo
 
 CONFIG = {
-    "curva": "secp384r1",                           # Curva elíptica utilizada para las firmas
+    "curva": "SECP256K1",                           # Curva elíptica utilizada para las firmas
     "alg": "md5",                                   # Algoritmo de hash utilizado
     "coins": 21000000,                              # Cantidad total de monedas en la blockchain
     "dificultad_inicial": "00",                     # Dificultad inicial de la minería
     "tiempo_ronda_seg": 45,                         # Ventana para obtener tareas de minería
     "tiempo_resultados_seg": 15,                    # Ventana para recibir resultados de mineria
-    "tiempo_espera_seg": 5,                        # Tiempo de espera entre rondas
+    "tiempo_espera_seg": 5,                         # Tiempo de espera entre rondas
     "max_intentos_mineria": 3,                      # Máximo de veces que se reintenta una tarea si no se obtiene resultado
     "premio_minado": 500,                           # Recompensa por minar un bloque
     "ntp_server": "ar.pool.ntp.org"                 # Servidor NTP utilizado para sincronizar la hora
