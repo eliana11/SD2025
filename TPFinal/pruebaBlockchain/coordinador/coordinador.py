@@ -533,17 +533,6 @@ def manejar_cambio_a_espera():
                 tarea_mineria_actual_global = None
             else:
                 logging.info(f"[📤] Reenviando tarea {bloque_index} a la cola de minería (intento {intentos})...")
-                tarea_mineria_actual_global = None
-                connection = pika.BlockingConnection(pika.ConnectionParameters(host=RABBITMQ_HOST))
-                channel = connection.channel()
-                # Asegurar que la cola exista
-                channel.queue_declare(queue='mining_tasks', durable=True)
-
-                channel.basic_publish(
-                    exchange='',
-                    routing_key='mining_tasks',
-                    body=json.dumps(tarea_mineria_actual_global)
-                )
     else:
         logging.warning("[⚠️] No había tarea de minería activa al comenzar esta ventana.")
 
