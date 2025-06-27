@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 COORDINADOR_URL = None
 MINERO_EJECUTABLE = "./MineroMD5"
 START_NONCE = 0
-END_NONCE = -1
+END_NONCE = 999999999999
 
 usuario = None
 configuracion = None
