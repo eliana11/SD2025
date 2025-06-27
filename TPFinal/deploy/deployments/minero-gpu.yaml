@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nodo-minero-gpu
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nodo-minero-gpu
+  template:
+    metadata:
+      labels:
+        app: nodo-minero-gpu
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: pop-os
+      containers:
+      - name: minero
+        image: elianacardona12/minero-gpu:latest
+        env:
+        - name: COORDINADOR_URL
+          value: "http://35.192.66.105:80"
+        args: ["201", "http://35.192.66.105:80"]
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
