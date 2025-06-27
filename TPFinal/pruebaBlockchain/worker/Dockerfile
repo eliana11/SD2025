@@ -37,4 +37,4 @@ RUN g++ MineroCPU.cpp -o MineroMD5CPU -static -static-libgcc -static-libstdc++ \
     -I/usr/local/include -L/usr/local/lib -lcrypto
 
 # Comando de entrada: ejecuta el worker con argumento
-CMD ["python3", "worker.py", "101", "http://host.docker.internal:5000"]
+CMD ["python3", "worker.py", "101", "http://35.192.66.105:80"]

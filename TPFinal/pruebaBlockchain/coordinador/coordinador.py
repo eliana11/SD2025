@@ -6,6 +6,8 @@ import ntplib
 import time
 import hashlib
 import redis
+import os
+import logging
 from flask import Flask, request, jsonify
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -13,16 +15,18 @@ from cryptography.exceptions import InvalidSignature
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-#transacciones_pendientes = []
 
-print("[INIT] Conectando a RabbitMQ...")
-rabbit_connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost'))
+RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "rabbitmq")
+REDIS_HOST = os.getenv("REDIS_HOST", "redis")
+
+print(f"[INIT] Conectando a RabbitMQ en {RABBITMQ_HOST}...")
+rabbit_connection = pika.BlockingConnection(pika.ConnectionParameters(host=RABBITMQ_HOST))
 channel = rabbit_connection.channel()
 channel.queue_declare(queue='mining_tasks')
 print("[OK] Conectado a RabbitMQ y cola declarada.")
 
-print("[INIT] Conectando a Redis...")
-redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+print(f"[INIT] Conectando a Redis en {REDIS_HOST}...")
+redis_client = redis.Redis(host=REDIS_HOST, port=6379, decode_responses=True)
 print("[OK] Conectado a Redis.")
 
 tarea_mineria_actual_global = None     # Almacena el bloque que se está minando actualmente
@@ -51,6 +55,11 @@ CONFIG = {
 
 # Cargadas desde Redis o con valores por defecto
 configuracion_blockchain = {} # Se cargará al inicio
+
+logging.basicConfig(level=logging.INFO)
+# Ajustar el nivel de logs para librerías externas para reducir ruido
+logging.getLogger("pika").setLevel(logging.WARNING)       # Solo warnings o errores de Pika
+logging.getLogger("werkzeug").setLevel(logging.WARNING)   # Solo warnings o errores del servidor Flask
 
 def ciclo_monitor():
     while True:
@@ -150,7 +159,7 @@ def agregar_transaccion():
 
     # Validar campos requeridos
     if not datos or 'transaccion' not in datos or 'clave_publica' not in datos or 'firma' not in datos:
-        print("[❌] Transacción incompleta: falta transaccion, clave_publica o firma")
+        logging.error("[❌] Transacción incompleta: falta transaccion, clave_publica o firma")
         return jsonify({"error": "Faltan campos requeridos: transaccion, clave_publica, firma"}), 400
 
     transaccion = datos["transaccion"]
@@ -163,12 +172,12 @@ def agregar_transaccion():
         firma = base64.b64decode(firma_b64)
         clave_publica = serialization.load_pem_public_key(clave_publica_pem.encode())
         clave_publica.verify(firma, mensaje, ec.ECDSA(hashes.SHA256()))
-        print("[🔐] Firma verificada correctamente.")
+        logging.info("[🔐] Firma verificada correctamente.")
     except InvalidSignature:
-        print("[❌] Firma inválida")
+        logging.error("[❌] Firma inválida")
         return jsonify({"error": "Firma inválida"}), 400
     except Exception as e:
-        print("[❌] Error en la validación:", e)
+        logging.error(f"[❌] Error en la validación: {e}")
         return jsonify({"error": f"Error en la validación: {str(e)}"}), 400
 
     # Guardar transacción pendiente
@@ -180,7 +189,7 @@ def agregar_transaccion():
 
     redis_client.rpush("transacciones_pendientes", firma_b64)
     redis_client.set(f"transaccion:{firma_b64}", json.dumps(entrada_pendiente))
-    print("[🧾] Transacción pendiente encolada en Redis:", transaccion)
+    logging.info(f"[🧾] Transacción pendiente encolada en Redis: {transaccion}")
 
     return jsonify({
         "mensaje": "Transacción válida y encolada para la próxima ronda.",
@@ -216,47 +225,57 @@ def obtener_tarea():
     global tarea_mineria_actual_global, total_workers_en_ronda
 
     if estado_actual() != 'ventana_tareas':
-        print("[⏸️] No es el momento de solicitar tareas. Ventana actual:", estado_actual())
+        logging.info("[⏸️] No es el momento de solicitar tareas. Ventana actual: %s", estado_actual())
         return jsonify({"mensaje": "No es el momento de solicitar tareas"}), 403
-    print("[⛏️] Buscando tarea en cola de minería...")
+
+    logging.info("[⛏️] Buscando tarea en cola de minería...")
 
     if tarea_mineria_actual_global:
         total_workers_en_ronda += 1
-        print(f"[WORKER_COUNT] Workers que han solicitado tarea en esta ronda: {total_workers_en_ronda}")
-        print("[📤] Tarea de minería entregada:", tarea_mineria_actual_global)
+        logging.info("[WORKER_COUNT] Workers que han solicitado tarea en esta ronda: %d", total_workers_en_ronda)
+        logging.info("[📤] Tarea de minería entregada: %s", tarea_mineria_actual_global)
         return jsonify(tarea_mineria_actual_global), 200
     else:
-        method_frame, header_frame, body = channel.basic_get(queue='mining_tasks', auto_ack=False)
-        if method_frame:
-            tarea_mineria_actual_global = json.loads(body)
-            total_workers_en_ronda = 1
-            channel.basic_ack(delivery_tag=method_frame.delivery_tag)
+        try:
+            connection = pika.BlockingConnection(pika.ConnectionParameters(host=RABBITMQ_HOST))
+            temp_channel = connection.channel()
 
-            print(f"[WORKER_COUNT] Primer worker de la ronda.")
-            print("[📤] Tarea de minería entregada y eliminada de la cola:", tarea_mineria_actual_global)
-            return jsonify(tarea_mineria_actual_global), 200
-        else:
-            print("[🟡] No hay tareas disponibles.")
-            return jsonify({"mensaje": "No hay tareas disponibles"}), 204
+            method_frame, header_frame, body = temp_channel.basic_get(queue='mining_tasks', auto_ack=False)
+            if method_frame:
+                tarea_mineria_actual_global = json.loads(body)
+                total_workers_en_ronda = 1
+                temp_channel.basic_ack(delivery_tag=method_frame.delivery_tag)
+
+                logging.info("[WORKER_COUNT] Primer worker de la ronda.")
+                logging.info("[📤] Tarea de minería entregada y eliminada de la cola: %s", tarea_mineria_actual_global)
+                return jsonify(tarea_mineria_actual_global), 200
+            else:
+                logging.warning("[🟡] No hay tareas disponibles.")
+                return jsonify({"mensaje": "No hay tareas disponibles"}), 204
+        except Exception as e:
+            logging.exception("❌ Error al intentar obtener tarea de RabbitMQ: %s", str(e))
+            return jsonify({"error": "Error al obtener tarea"}), 500
+        finally:
+            if 'connection' in locals() and connection.is_open:
+                connection.close()
 
 @app.route('/resultado', methods=['POST'])
 def recibir_resultado_mineria():
     global primer_bloque_encontrado_global, tarea_mineria_actual_global, soluciones_exitosas_en_ronda, configuracion_blockchain
-    
+
     if estado_actual() != 'ventana_resultados':
-        print("[⏸️] No es el momento de publicar resultados. Ventana actual:", estado_actual())
+        logging.info("[⏸️] No es el momento de publicar resultados. Ventana actual: %s", estado_actual())
         return jsonify({"mensaje": "No es el momento de publicar resultados"}), 403
 
     bloque = request.get_json()
-    print("Recibiendo resultado de minería: ", bloque)
+    logging.info("Recibiendo resultado de minería: %s", bloque)
 
     if not bloque or 'hash' not in bloque or 'nonce' not in bloque or 'direccion' not in bloque:
-        print("Bloque inválido o incompleto")
+        logging.warning("Bloque inválido o incompleto")
         return jsonify({"error": "Bloque inválido o incompleto, falta clave_publica, hash o nonce"}), 400
 
     clave_publica = bloque["direccion"]
 
-    # Obtener el bloque original desde Redis (basado en el index)
     bloque_original_id = bloque.get("index")
     if bloque_original_id is None:
         return jsonify({"error": "Falta el index del bloque para verificar el hash"}), 400
@@ -268,24 +287,21 @@ def recibir_resultado_mineria():
     bloque_guardado = json.loads(bloque_guardado_str)
     bloque_guardado["nonce"] = bloque["nonce"]
 
-    # Recalcular el hash
     hash_calculado = calcular_hash(bloque_guardado)
 
     if hash_calculado != bloque["hash"]:
-        print("Hash inválido. Calculado:", hash_calculado, "Recibido:", bloque["hash"])
+        logging.warning("Hash inválido. Calculado: %s | Recibido: %s", hash_calculado, bloque["hash"])
         return jsonify({"error": "Hash inválido"}), 400
 
     dificultad = redis_client.get("dificultad_actual")
     if not bloque["hash"].startswith("0" * len(dificultad)):
-        print("Hash no cumple la dificultad.")
+        logging.warning("Hash no cumple la dificultad (%s)", dificultad)
         return jsonify({"error": f"No cumple la dificultad ({dificultad})"}), 400
 
     soluciones_exitosas_en_ronda += 1
-    print(f"Soluciones exitosas recibidas en esta ronda: {soluciones_exitosas_en_ronda}")
+    logging.info("Soluciones exitosas recibidas en esta ronda: %d", soluciones_exitosas_en_ronda)
 
     if primer_bloque_encontrado_global is None:
-        # Este es el primer resultado válido recibido, lo aceptamos
-
         bloque_final_para_guardar = bloque_guardado.copy()
         bloque_final_para_guardar["hash"] = bloque["hash"]
 
@@ -295,11 +311,10 @@ def recibir_resultado_mineria():
             "clave_publica_minero": clave_publica
         }
 
+        logging.info("✅ Primer bloque válido agregado: %s", primer_bloque_encontrado_global)
         return jsonify({"mensaje": "Primer bloque válido agregado y recompensa asignada"}), 200
-
     else:
-        # No es el primer resultado, validar pero no guardar ni recompensar
-        print(f"Resultado válido recibido para bloque index {bloque_original_id}, pero no es el primero, no se guarda ni recompensa.")
+        logging.info("Resultado válido recibido para bloque index %s, pero no es el primero, no se guarda ni recompensa.", bloque_original_id)
         return jsonify({"mensaje": "Resultado válido pero bloque ya encontrado por otro minero"}), 200
 
 def estado_actual():
@@ -489,52 +504,51 @@ def manejar_cambio_a_espera():
     global tarea_mineria_actual_global, primer_bloque_encontrado_global
     global total_workers_en_ronda, soluciones_exitosas_en_ronda
 
-    print("\n[⏱️] Cambio detectado a ventana de espera. Procesando estado de minería...")
+    logging.info("\n[⏱️] Cambio detectado a ventana de espera. Procesando estado de minería...")
 
     if tarea_mineria_actual_global:
         bloque_index = tarea_mineria_actual_global["index"]
-        print(f"[🔎] Evaluando estado del bloque {bloque_index}...")
+        logging.info(f"[🔎] Evaluando estado del bloque {bloque_index}...")
 
         if primer_bloque_encontrado_global:
-            print("[✅] Se encontró un bloque válido durante la ronda. Procesando...")
+            logging.info("[✅] Se encontró un bloque válido durante la ronda. Procesando...")
             procesar_bloque_encontrado(primer_bloque_encontrado_global)
             primer_bloque_encontrado_global = None
             redis_client.delete(f"tarea_bloque:{bloque_index}")
             redis_client.delete(f"intentos:{bloque_index}")
             tarea_mineria_actual_global = None
         else:
-            print("[❌] Ningún minero resolvió la tarea. Evaluando reintento...")
+            logging.warning("[❌] Ningún minero resolvió la tarea. Evaluando reintento...")
             redis_client.incr(f"intentos:{bloque_index}")
             intentos_str = redis_client.get(f"intentos:{bloque_index}")
             intentos = int(intentos_str or 0)
 
-            print(f"[🔁] Intento actual: {intentos}/{CONFIG['max_intentos_mineria']}")
+            logging.info(f"[🔁] Intento actual: {intentos}/{CONFIG['max_intentos_mineria']}")
 
-            if intentos > configuracion_blockchain["max_intentos_mineria"]:
-                print(f"[🛑] Máximo de intentos alcanzado para bloque {bloque_index}. Se descarta definitivamente.")
+            if intentos > CONFIG["max_intentos_mineria"]:
+                logging.error(f"[🛑] Máximo de intentos alcanzado para bloque {bloque_index}. Se descarta definitivamente.")
                 redis_client.delete(f"tarea_bloque:{bloque_index}")
                 redis_client.delete(f"intentos:{bloque_index}")
                 tarea_mineria_actual_global = None
             else:
-                print(f"[📤] Reenviando tarea {bloque_index} a la cola de minería (intento {intentos})...")
+                logging.info(f"[📤] Reenviando tarea {bloque_index} a la cola de minería (intento {intentos})...")
                 channel.basic_publish(
                     exchange='', routing_key='mining_tasks', body=json.dumps(tarea_mineria_actual_global)
                 )
-
     else:
-        print("[⚠️] No había tarea de minería activa al comenzar esta ventana.")
+        logging.warning("[⚠️] No había tarea de minería activa al comenzar esta ventana.")
 
-    print("[⚙️] Ajustando dificultad en función de los resultados...")
+    logging.info("[⚙️] Ajustando dificultad en función de los resultados...")
     ajustar_dificultad()
 
     if not tarea_mineria_actual_global:
-        print("[🚀] Preparando nueva tarea desde las transacciones pendientes...")
+        logging.info("[🚀] Preparando nueva tarea desde las transacciones pendientes...")
         crear_tarea_desde_pendientes()
     else:
-        print("[🕒] Tarea aún en curso. No se crea una nueva tarea.")
+        logging.info("[🕒] Tarea aún en curso. No se crea una nueva tarea.")
 
 def crear_tarea_desde_pendientes():
-    print("[📥] Recuperando transacciones pendientes para nuevo bloque...")
+    logging.info("[📥] Recuperando transacciones pendientes para nuevo bloque...")
     transacciones = []
 
     while redis_client.llen("transacciones_pendientes") > 0:
@@ -543,18 +557,18 @@ def crear_tarea_desde_pendientes():
             t_json = redis_client.get(f"transaccion:{firma}")
             if t_json:
                 transacciones.append(json.loads(t_json))
-                print(f"[➕] Transacción recuperada: {firma}")
+                logging.info(f"[➕] Transacción recuperada: {firma}")
 
     if not transacciones:
-        print("[🟡] No hay transacciones suficientes para crear un nuevo bloque.")
+        logging.warning("[🟡] No hay transacciones suficientes para crear un nuevo bloque.")
         return
 
-    print(f"[📦] {len(transacciones)} transacciones listas para minar. Creando bloque...")
+    logging.info(f"[📦] {len(transacciones)} transacciones listas para minar. Creando bloque...")
     crear_nueva_tarea(transacciones)
 
 def crear_nueva_tarea(transacciones=None): 
     global tarea_mineria_actual_global, contador_intentos_mineria_global, tiempo_inicio_mineria_global, primer_bloque_encontrado_global
-    print("[🧱] Creando nueva tarea de minería...")
+    logging.info("[🧱] Creando nueva tarea de minería...")
 
     prox_indice = redis_client.llen("blockchain")        
     hora = obtener_hora_ntp().strftime("%Y-%m-%d %H:%M:%S")
@@ -569,12 +583,12 @@ def crear_nueva_tarea(transacciones=None):
         "timestamp": hora
     }
 
-    print(f"[🔧] Nueva tarea creada: índice {prox_indice}, dificultad {dificultad_actual}, {len(transacciones)} transacciones.")
+    logging.info(f"[🔧] Nueva tarea creada: índice {prox_indice}, dificultad {dificultad_actual}, {len(transacciones)} transacciones.")
 
     redis_client.set("bloque_en_curso", json.dumps(new_block))
     enviar_a_minar(new_block)
     primer_bloque_encontrado_global = None
-    print("[📤] Tarea enviada a la cola de minería.")
+    logging.info("[📤] Tarea enviada a la cola de minería.")
     return new_block
 
 def cargar_configuracion_blockchain():

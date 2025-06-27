@@ -14,7 +14,6 @@ COORDINADOR_URL = None
 MINERO_EJECUTABLE = "./MineroMD5CPU"
 START_NONCE = 0
 END_NONCE = -1
-MARGEN_SINCRONIZACION = 0.5  # 500ms de tolerancia
 
 usuario = None
 configuracion = None
@@ -59,7 +58,6 @@ def esperar_y_obtener_estado(objetivo="ventana_tareas"):
         
         # Esperar de forma más granular (máx s)
         time.sleep(min(5, tiempo_restante))
-
 
 def obtener_configuracion():
     try:
