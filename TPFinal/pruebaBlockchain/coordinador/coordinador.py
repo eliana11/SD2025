@@ -19,12 +19,6 @@ app = Flask(__name__)
 RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "rabbitmq")
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")
 
-print(f"[INIT] Conectando a RabbitMQ en {RABBITMQ_HOST}...")
-rabbit_connection = pika.BlockingConnection(pika.ConnectionParameters(host=RABBITMQ_HOST))
-channel = rabbit_connection.channel()
-channel.queue_declare(queue='mining_tasks')
-print("[OK] Conectado a RabbitMQ y cola declarada.")
-
 print(f"[INIT] Conectando a Redis en {REDIS_HOST}...")
 redis_client = redis.Redis(host=REDIS_HOST, port=6379, decode_responses=True)
 print("[OK] Conectado a Redis.")
@@ -239,7 +233,7 @@ def obtener_tarea():
         try:
             connection = pika.BlockingConnection(pika.ConnectionParameters(host=RABBITMQ_HOST))
             temp_channel = connection.channel()
-
+            temp_channel.queue_declare(queue='mining_tasks', durable=True)
             method_frame, header_frame, body = temp_channel.basic_get(queue='mining_tasks', auto_ack=False)
             if method_frame:
                 tarea_mineria_actual_global = json.loads(body)
@@ -458,22 +452,28 @@ def crear_bloque_genesis():
     return bloque
 
 def enviar_a_minar(bloque):
-    print("[📤] Enviando bloque a minar...")
+    logging.info("[📤] Enviando bloque a minar...")
 
-    # Guardar número de intento en Redis
     redis_client.set(f"intentos:{bloque['index']}", 1)
     redis_client.set(f"tarea_bloque:{bloque['index']}", json.dumps(bloque))
 
-    channel.basic_publish(exchange='', routing_key='mining_tasks', body=json.dumps(bloque))
-    print("[🚀] Bloque enviado a minar:", bloque)
+    try:
+        connection = pika.BlockingConnection(pika.ConnectionParameters(host=RABBITMQ_HOST))
+        channel = connection.channel()
+        channel.queue_declare(queue='mining_tasks', durable=True)
+        channel.basic_publish(exchange='', routing_key='mining_tasks', body=json.dumps(bloque))
+        logging.info("[🚀] Bloque enviado a minar: %s", bloque)
+    except Exception as e:
+        logging.exception("❌ Error al enviar bloque a RabbitMQ: %s", str(e))
+    finally:
+        if 'connection' in locals() and connection.is_open:
+            connection.close()
 
 def procesar_bloque_encontrado(datos_primer_bloque):
     
     bloque_verificado = datos_primer_bloque["bloque_validado"]
     clave_publica_minero = datos_primer_bloque["clave_publica_minero"] # No usada en esta iteración
     hash_final = datos_primer_bloque["hash_final"]
-
-    # No se añade recompensa en esta iteración.
     
     bloque_final = bloque_verificado
     bloque_final["hash"] = hash_final
@@ -516,6 +516,7 @@ def manejar_cambio_a_espera():
             primer_bloque_encontrado_global = None
             redis_client.delete(f"tarea_bloque:{bloque_index}")
             redis_client.delete(f"intentos:{bloque_index}")
+            logging.info("[🗑️] Tarea de minería eliminada de Redis y RabbitMQ.")
             tarea_mineria_actual_global = None
         else:
             logging.warning("[❌] Ningún minero resolvió la tarea. Evaluando reintento...")
@@ -532,8 +533,16 @@ def manejar_cambio_a_espera():
                 tarea_mineria_actual_global = None
             else:
                 logging.info(f"[📤] Reenviando tarea {bloque_index} a la cola de minería (intento {intentos})...")
+                tarea_mineria_actual_global = None
+                connection = pika.BlockingConnection(pika.ConnectionParameters(host=RABBITMQ_HOST))
+                channel = connection.channel()
+                # Asegurar que la cola exista
+                channel.queue_declare(queue='mining_tasks', durable=True)
+
                 channel.basic_publish(
-                    exchange='', routing_key='mining_tasks', body=json.dumps(tarea_mineria_actual_global)
+                    exchange='',
+                    routing_key='mining_tasks',
+                    body=json.dumps(tarea_mineria_actual_global)
                 )
     else:
         logging.warning("[⚠️] No había tarea de minería activa al comenzar esta ventana.")
