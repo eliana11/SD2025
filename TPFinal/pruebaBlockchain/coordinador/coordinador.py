@@ -42,7 +42,7 @@ CONFIG = {
     "tiempo_ronda_seg": 45,                         # Ventana para obtener tareas de minería
     "tiempo_resultados_seg": 15,                    # Ventana para recibir resultados de mineria
     "tiempo_espera_seg": 5,                         # Tiempo de espera entre rondas
-    "max_intentos_mineria": 3,                      # Máximo de veces que se reintenta una tarea si no se obtiene resultado
+    "max_intentos_mineria": 10,                     # Máximo de veces que se reintenta una tarea si no se obtiene resultado
     "premio_minado": 500,                           # Recompensa por minar un bloque
     "ntp_server": "ar.pool.ntp.org"                 # Servidor NTP utilizado para sincronizar la hora
 }
@@ -198,18 +198,52 @@ def ver_transacciones():
     transacciones = [json.loads(redis_client.get(f"transaccion:{firma}")) for firma in firmas]
     return jsonify(transacciones), 200
 
-# Endpoint para lectura de la blockchain
 @app.route("/blockchain", methods=["GET"])
 def obtener_blockchain():
-    bloques = [json.loads(b) for b in redis_client.lrange("blockchain", 0, -1)]
-    return jsonify(bloques), 200
+    try:
+        entradas = redis_client.lrange("blockchain", 0, -1)
+        bloques = []
+
+        for entrada in entradas:
+            if isinstance(entrada, bytes):
+                entrada = entrada.decode("utf-8")
+
+            if ":" not in entrada:
+                continue  # saltar entrada malformada
+
+            _, hash_bloque = entrada.split(":", 1)
+            clave_bloque = f"bloque:{hash_bloque}"
+
+            bloque_json = redis_client.get(clave_bloque)
+            if not bloque_json:
+                logging.warning(f"[⚠️] No se encontró bloque con hash: {hash_bloque}")
+                continue
+
+            if isinstance(bloque_json, bytes):
+                bloque_json = bloque_json.decode("utf-8")
+
+            try:
+                bloque = json.loads(bloque_json)
+                bloques.append({
+                    "bloque": bloque,
+                    "hash": hash_bloque
+                })
+            except json.JSONDecodeError:
+                logging.warning(f"[⚠️] JSON inválido para bloque {hash_bloque}: {bloque_json}")
+                continue
+
+        return jsonify(bloques), 200
+
+    except Exception as e:
+        logging.exception("[❌] Error al obtener blockchain")
+        return jsonify({"error": "Error al obtener blockchain"}), 500
 
 # Endpoint para obtener la configuración de la blockchain
 @app.route("/configuracion", methods=["GET"])
 def obtener_configuracion():
     config_json = redis_client.get("configuracion_blockchain")
     if not config_json:
-        print("[❌] No se encontró configuración de la blockchain.")
+        logging.info("[❌] No se encontró configuración de la blockchain.")
         return jsonify({"error": "Configuración no encontrada"}), 404
     config = json.loads(config_json)
     return jsonify(config), 200
@@ -335,7 +369,7 @@ def enviar_recompensa(clave_publica):
     recompensa = CONFIG.get("premio_minado", 0)
 
     if recompensa <= 0:
-        print("[⚠️] No se configuró una recompensa para el minado de bloques.")
+        logging.info("[⚠️] No se configuró una recompensa para el minado de bloques.")
         return
     hora = obtener_hora_ntp().strftime("%Y-%m-%d %H:%M:%S")
     transaccion_recompensa = {
@@ -355,12 +389,12 @@ def enviar_recompensa(clave_publica):
 
 def calcular_hash(bloque):
     bloque_str = json.dumps(bloque, sort_keys=True, separators=(',', ':'))
-    print("[DEBUG] Calculando hash sobre la siguiente cadena JSON ordenada:")
-    print(bloque_str)
+    logging.info("[DEBUG] Calculando hash sobre la siguiente cadena JSON ordenada:")
+    logging.info(bloque_str)
     return hashlib.md5(bloque_str.encode()).hexdigest()
 
 def guardar_bloque_en_redis(bloque):
-    print("[💾] Guardando bloque en Redis...")
+    logging.info("[💾] Guardando bloque en Redis...")
     hash_bloque = bloque["hash"]
     bloque_id = str(bloque.get("index", 0))
 
@@ -372,7 +406,7 @@ def guardar_bloque_en_redis(bloque):
 
     # Agregar a la lista principal de la blockchain
     redis_client.rpush("blockchain", hash_bloque)
-    print("[📦] Bloque guardado con hash:", hash_bloque)
+    logging.info("[📦] Bloque guardado con hash:", hash_bloque)
 
 def obtener_ultimo_hash():
     if redis_client.llen("blockchain") == 0:
@@ -394,7 +428,7 @@ def ajustar_dificultad():
     if total_workers_en_ronda > 0:
         tasa_exito = soluciones_exitosas_en_ronda / total_workers_en_ronda
 
-    print(f"[DIFICULTAD] Resumen de ronda: {soluciones_exitosas_en_ronda} soluciones exitosas de {total_workers_en_ronda} workers (Tasa: {tasa_exito:.2f})")
+    logging.info(f"[DIFICULTAD] Resumen de ronda: {soluciones_exitosas_en_ronda} soluciones exitosas de {total_workers_en_ronda} workers (Tasa: {tasa_exito:.2f})")
 
     nueva_dificultad = dificultad_actual
 
@@ -413,27 +447,27 @@ def ajustar_dificultad():
         else: # Si ya era "", establecer a "00"
             nueva_dificultad = "00" # Dificultad mínima por defecto
         
-        print(f"[DIFICULTAD] Tasa de éxito del 0%. Dificultad reducida de '{dificultad_actual}' a '{nueva_dificultad}'.")
+        logging.info(f"[DIFICULTAD] Tasa de éxito del 0%. Dificultad reducida de '{dificultad_actual}' a '{nueva_dificultad}'.")
     elif tasa_exito >= 0.90:
         nueva_dificultad = dificultad_actual + "00"
-        print(f"[DIFICULTAD] Tasa de éxito del >=90%. Dificultad aumentada de '{dificultad_actual}' a '{nueva_dificultad}'.")
+        logging.info(f"[DIFICULTAD] Tasa de éxito del >=90%. Dificultad aumentada de '{dificultad_actual}' a '{nueva_dificultad}'.")
     elif tasa_exito >= 0.20: 
-        print(f"[DIFICULTAD] Tasa de éxito ~20-90%. Dificultad se mantiene en '{dificultad_actual}'.")
+        logging.info(f"[DIFICULTAD] Tasa de éxito ~20-90%. Dificultad se mantiene en '{dificultad_actual}'.")
     else:
-        print(f"[DIFICULTAD] Tasa de éxito entre 0% y 20% (excl. 0%). Dificultad se mantiene en '{dificultad_actual}'.")
+        logging.info(f"[DIFICULTAD] Tasa de éxito entre 0% y 20% (excl. 0%). Dificultad se mantiene en '{dificultad_actual}'.")
 
     if nueva_dificultad != dificultad_actual:
         redis_client.set("dificultad_actual", nueva_dificultad)
-        print(f"[DIFICULTAD] Nueva dificultad '{nueva_dificultad}' guardada en Redis.")
+        logging.info(f"[DIFICULTAD] Nueva dificultad '{nueva_dificultad}' guardada en Redis.")
     else:
-        print("[DIFICULTAD] Dificultad no ha cambiado.")
+        logging.info("[DIFICULTAD] Dificultad no ha cambiado.")
 
         # Resetear contadores para la próxima ronda
     total_workers_en_ronda = 0
     soluciones_exitosas_en_ronda = 0
 
 def crear_bloque_genesis():
-    print("[🌱] Creando bloque génesis...")
+    logging.info("[🌱] Creando bloque génesis...")
     transaccion_origen = {
         "de": "0" * 64,                                       # No hay origen en el bloque génesis
         "para": "CoinBase",                                   # Cuenta encargada de dar recompensas
@@ -443,7 +477,7 @@ def crear_bloque_genesis():
     bloque = {
         "index": 0,
         "transacciones": [transaccion_origen],
-        "prev_hash": "0" * 64,
+        "hash": "0" * 64,                                     # Hash del bloque génesis (todo ceros)
         "nonce": 0,
         "configuracion": CONFIG,
         "dificultad": CONFIG.get("dificultad_inicial", "00"), # Dificultad inicial
@@ -487,13 +521,13 @@ def procesar_bloque_encontrado(datos_primer_bloque):
             redis_client.delete(f"transaccion:{tx['firma']}")
             redis_client.lrem("mempool", 0, tx["firma"])
         else:
-            print(f"[*] Transacción sin 'firma' (CoinBase). No eliminada del mempool. Transacción: {tx}")
+            logging.info(f"[*] Transacción sin 'firma' (CoinBase). No eliminada del mempool. Transacción: {tx}")
 
-    print("[🥳] Bloque minado con éxito y agregado a la blockchain, recompensa entragada al minero.")
+    logging.info("[🥳] Bloque minado con éxito y agregado a la blockchain, recompensa entragada al minero.")
 
 def manejar_cambio_a_resultados():
     global tarea_mineria_actual_global
-    print(f"[🏁] Cambio a ventana de resultados para bloque {tarea_mineria_actual_global['index'] if tarea_mineria_actual_global else 'N/A'}.")
+    logging.info(f"[🏁] Cambio a ventana de resultados para bloque {tarea_mineria_actual_global['index'] if tarea_mineria_actual_global else 'N/A'}.")
 
 def manejar_cambio_a_tareas():
     global total_workers_en_ronda, soluciones_exitosas_en_ronda
@@ -592,14 +626,14 @@ def crear_nueva_tarea(transacciones=None):
 def cargar_configuracion_blockchain():
     global configuracion_blockchain, CICLO_TOTAL
     config_json = redis_client.get("configuracion_blockchain")
-    print("[⚙️] Cargando configuración de la blockchain desde Redis.")
+    logging.info("[⚙️] Cargando configuración de la blockchain desde Redis.")
     CICLO_TOTAL = CONFIG["tiempo_ronda_seg"] + CONFIG["tiempo_resultados_seg"] + CONFIG["tiempo_espera_seg"]
     configuracion_blockchain = json.loads(config_json)
 
 def crear_configuracion():    
     config = CONFIG.copy()  # Copia la configuración por defecto
     redis_client.set("configuracion_blockchain", json.dumps(config))
-    print("[⚙️] Configuración almacenada en Redis.")
+    logging.info("[⚙️] Configuración almacenada en Redis.")
     global CICLO_TOTAL
     redis_client.set("dificultad_actual", CONFIG["dificultad_inicial"]) # Inicializar dificultad
     CICLO_TOTAL = CONFIG["tiempo_ronda_seg"] + CONFIG["tiempo_resultados_seg"] + CONFIG["tiempo_espera_seg"]
@@ -607,15 +641,15 @@ def crear_configuracion():
 
 def inicializar_blockchain():
     global tarea_mineria_actual_global
-    print("[🔧] Inicializando blockchain...")
+    logging.info("[🔧] Inicializando blockchain...")
     if redis_client.llen("blockchain") == 0:
-        print("[🧱] No se encontró blockchain. Generando configuración y bloque génesis...")
+        logging.info("[🧱] No se encontró blockchain. Generando configuración y bloque génesis...")
         crear_configuracion()
         bloque_genesis = crear_bloque_genesis()
-        enviar_a_minar(bloque_genesis)
-        print("[🌱] Bloque génesis preparado para minar y ronda iniciada.")
+        guardar_bloque_en_redis(bloque_genesis)
+        logging.info("[🌱] Bloque génesis creado.")
     else:
-        print("[✅] Blockchain ya existe.")
+        logging.info("[✅] Blockchain ya existe.")
         cargar_configuracion_blockchain()
 
 if __name__ == "__main__":
