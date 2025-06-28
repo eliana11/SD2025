@@ -201,20 +201,16 @@ def ver_transacciones():
 @app.route("/blockchain", methods=["GET"])
 def obtener_blockchain():
     try:
-        entradas = redis_client.lrange("blockchain", 0, -1)
+        hashes = redis_client.lrange("blockchain", 0, -1)
         bloques = []
 
-        for entrada in entradas:
-            if isinstance(entrada, bytes):
-                entrada = entrada.decode("utf-8")
+        for hash_bloque in hashes:
+            if isinstance(hash_bloque, bytes):
+                hash_bloque = hash_bloque.decode("utf-8")
 
-            if ":" not in entrada:
-                continue  # saltar entrada malformada
-
-            _, hash_bloque = entrada.split(":", 1)
             clave_bloque = f"bloque:{hash_bloque}"
-
             bloque_json = redis_client.get(clave_bloque)
+
             if not bloque_json:
                 logging.warning(f"[⚠️] No se encontró bloque con hash: {hash_bloque}")
                 continue
@@ -224,10 +220,7 @@ def obtener_blockchain():
 
             try:
                 bloque = json.loads(bloque_json)
-                bloques.append({
-                    "bloque": bloque,
-                    "hash": hash_bloque
-                })
+                bloques.append(bloque)
             except json.JSONDecodeError:
                 logging.warning(f"[⚠️] JSON inválido para bloque {hash_bloque}: {bloque_json}")
                 continue
@@ -237,6 +230,7 @@ def obtener_blockchain():
     except Exception as e:
         logging.exception("[❌] Error al obtener blockchain")
         return jsonify({"error": "Error al obtener blockchain"}), 500
+
 
 # Endpoint para obtener la configuración de la blockchain
 @app.route("/configuracion", methods=["GET"])

@@ -23,7 +23,7 @@ spec:
                   - aplicaciones
       containers:
         - name: coordinador
-          image: bautista222221/coordinador:2.6
+          image: bautista222221/coordinador:2.7
           ports:
             - containerPort: 5000
           env:
