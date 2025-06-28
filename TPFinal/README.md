@@ -18,3 +18,7 @@ El desarrollo se explica en el informe antes mencionado el código compatible es
 ## Hit #7 - HASH por fuerza bruta con CUDA (con límites)
 
 El desarrollo se explica en el informe antes mencionado el código compatible es HashFuerzaBrutaConLimites.cu, de esta carpeta para GPU y HashMD5CPU.cpp para CPU.
+
+## Pilar 2 - Nodo Coordinador de Tareas
+
+Su implementacion se encuentra dentro de pruebaBlockhain/coordinador/coordinador.py

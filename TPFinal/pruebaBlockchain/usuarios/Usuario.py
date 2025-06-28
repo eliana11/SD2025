@@ -91,7 +91,7 @@ class UsuarioBlockchain:
         url = f"{self.coordinador_url}/transaccion"
         response = requests.post(url, json=datos)
 
-        if response.status_code == 202:
+        if response.status_code == 201:
             print("[✅] Transacción enviada con éxito:", response.json())
         else:
             print("[❌] Error al enviar transacción:", response.status_code, response.text)
